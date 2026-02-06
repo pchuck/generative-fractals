@@ -1,0 +1,10 @@
+# Fractal Generator Dependencies
+
+# Pillow for image processing and saving
+Pillow>=9.0.0
+
+# NumPy for accelerated fractal computation
+numpy>=1.20.0
+
+# Tkinter is part of Python standard library (python3-tk on Linux)
+# No pip install needed, but may require: sudo apt-get install python3-tk

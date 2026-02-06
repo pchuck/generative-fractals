@@ -1,0 +1,110 @@
+================================================================================
+                       FRACTAL GENERATOR REQUIREMENTS
+                              v1.0
+================================================================================
+
+OVERVIEW
+--------
+An interactive fractal explorer application that renders various mathematical
+fractals with customizable visualization parameters and color palettes.
+
+
+INTERACTIVE EXPLORATION
+-----------------------
+  • Display rendered fractal images on a canvas area
+  • Navigate by clicking and dragging to define zoom region
+  • Reset view to default bounds for the current fractal type
+
+
+CONFIGURABLE PARAMETERS
+-----------------------
+  • Iteration Limit: Adjustable range (minimum through maximum) controlling
+    how many iterations are computed before classifying a point as bounded.
+    
+  • Fractal-Specific Controls:
+    - Julia-type fractals: Real and imaginary components of c parameter,
+      plus optional starting offset z₀
+    - Multibrot: Exponent power value
+    - Phoenix: c parameter (real/imaginary) and p coefficient
+
+
+COLOR PALETTES
+--------------
+  • Multiple built-in palette options for rendering
+  • Palette functions map iteration counts to RGB color values
+  • Non-escaping points rendered with designated sentinel color
+
+
+MODULAR ARCHITECTURE
+--------------------
+  Fractal Types:
+    - Each fractal is a class implementing calculate(x, y, max_iter)
+    - Factory pattern for creation by name (display name or internal key)
+    - Supports runtime registration of additional fractal types
+
+  Color Palettes:
+    - Palette functions follow signature: (iter_count, max_iter) → RGB tuple
+    - Factory supports lookup and optional runtime registration
+
+
+EXTENSIBILITY POINTS
+--------------------
+  Adding a New Fractal:
+    1. Create class inheriting from FractalType
+    2. Implement name property and calculate() method
+    3. Register via FractalFactory.register(name, class)
+
+  Adding a New Palette:
+    1. Define function with (iter_count, max_iter) → RGB signature
+    2. Return black for iter_count == max_iter to mark bounded points
+    3. Register via PaletteFactory.register(name, func)
+
+
+PARALLEL COMPUTATION
+--------------------
+  Rendering may use multi-process execution for parallel computation.
+  
+  Implementation guidelines:
+    - Worker count based on available cores and canvas dimensions
+    - Sufficient rows per worker to amortize process spawn overhead
+    - At least one worker always active regardless of canvas size
+
+
+SESSION STATE PRESERVATION
+--------------------------
+  Per-fractal state caching:
+    • View coordinates (x_min, x_max, y_min, y_max)
+    • Iteration limit
+    
+  State is restored when switching back to a previously-viewed fractal.
+
+
+USER INTERFACE COMPONENTS
+-------------------------
+  Controls Area:
+    - Fractal type selector (dropdown)
+    - Palette selector (dropdown)  
+    - Iteration count control (slider or similar input)
+    - Parallel computation toggle
+    - View reset button
+    - Save image button
+
+  Parameter Panels:
+    - Dynamically displayed based on selected fractal
+    - Real/imaginary input fields as needed for c, z₀ parameters
+
+
+INPUT/OUTPUT
+------------
+  Input:
+    - Mouse interaction for zoom selection
+    - UI controls for parameter adjustment
+    
+  Output:
+    - On-screen fractal rendering
+    - Optional image export to standard format (JPEG)
+
+
+================================================================================
+                              END OF REQUIREMENTS
+================================================================================
