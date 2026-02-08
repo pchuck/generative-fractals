@@ -15,6 +15,14 @@ from typing import Union
 
 from fractals.mandelbrot import Mandelbrot
 from fractals.julia import Julia, JULIA_PRESETS
+from fractals.burning_ship import BurningShip
+from fractals.tricorn import Tricorn
+from fractals.multibrot import Multibrot
+from fractals.phoenix import Phoenix
+from fractals.newton import Newton
+from fractals.cubic_julia import CubicJulia
+from fractals.feather import Feather
+from fractals.spider import Spider
 from fractals import FractalBase
 from palettes.standard import (
     SmoothPalette, BandedPalette, GrayscalePalette,
@@ -175,6 +183,14 @@ class FractalApp:
         fractal_map = {
             "Mandelbrot Set": "mandelbrot",
             "Julia Set": "julia",
+            "Burning Ship": "burning_ship",
+            "Tricorn": "tricorn",
+            "Multibrot": "multibrot",
+            "Phoenix": "phoenix",
+            "Newton": "newton",
+            "Cubic Julia": "cubic_julia",
+            "Feather": "feather",
+            "Spider": "spider"
         }
         self.load_fractal(fractal_map.get(selected, "mandelbrot"))
 
@@ -202,12 +218,17 @@ class FractalApp:
 
     def load_fractal(self, name: str):
         """Load a fractal by name."""
-        from fractals.mandelbrot import Mandelbrot
-        from fractals.julia import Julia
-
         fractal_classes = {
             "mandelbrot": Mandelbrot,
-            "julia": Julia
+            "julia": Julia,
+            "burning_ship": BurningShip,
+            "tricorn": Tricorn,
+            "multibrot": Multibrot,
+            "phoenix": Phoenix,
+            "newton": Newton,
+            "cubic_julia": CubicJulia,
+            "feather": Feather,
+            "spider": Spider
         }
 
         self.current_fractal_name = name
