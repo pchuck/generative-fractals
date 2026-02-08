@@ -10,12 +10,6 @@ python fractal_explorer.py
 
 # Run quick test (opens GUI window)
 python test_app.py
-
-# Run a specific test file (if pytest available)
-python -m pytest test_app.py -v
-
-# Run a single test function
-python -m pytest test_app.py::test_function_name -v
 ```
 
 ## Code Style Guidelines
@@ -162,5 +156,6 @@ Core dependencies:
 ## Testing Notes
 
 - Tests open GUI windows and require user interaction to close
-- Use `python test_app.py` for smoke testing
-- No formal unit test suite currently configured
+- Use `python test_app.py` for smoke testing (GUI-based, not pytest)
+- No formal unit test suite or pytest configuration currently exists
+- Test application manually by verifying fractal rendering and UI functionality
