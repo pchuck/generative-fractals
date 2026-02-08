@@ -1,6 +1,8 @@
 """Cubic Julia set implementation."""
 
 import numpy as np
+from typing import Dict, Any
+
 from . import FractalBase, register_fractal
 
 

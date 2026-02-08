@@ -1,6 +1,8 @@
 """Burning Ship fractal implementation."""
 
 import numpy as np
+from typing import Dict, Any
+
 from . import FractalBase, register_fractal
 
 
@@ -11,6 +13,9 @@ class BurningShip(FractalBase):
     name = "Burning Ship"
     description = "Uses absolute values for ship-like shapes"
     parameters: Dict[str, Any] = {}
+    
+    def __init__(self):
+        self.power = 2
     
     def get_default_bounds(self) -> Dict[str, float]:
         return {'xmin': -2.0, 'xmax': 1.5, 'ymin': -2.5, 'ymax': 0.5}

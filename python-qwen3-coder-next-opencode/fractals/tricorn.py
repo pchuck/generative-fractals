@@ -1,6 +1,8 @@
 """Tricorn (Mandelbar) fractal implementation."""
 
 import numpy as np
+from typing import Dict, Any
+
 from . import FractalBase, register_fractal
 
 
@@ -11,6 +13,9 @@ class Tricorn(FractalBase):
     name = "Tricorn"
     description = "Conjugates z before squaring"
     parameters: Dict[str, Any] = {}
+    
+    def __init__(self):
+        self.power = 2
     
     def get_default_bounds(self) -> Dict[str, float]:
         return {'xmin': -2.0, 'xmax': 1.5, 'ymin': -1.5, 'ymax': 1.5}

@@ -1,21 +1,23 @@
 """Spider fractal implementation."""
 
 import numpy as np
+from typing import Dict, Any
+
 from . import FractalBase, register_fractal
 
 
-@register_fratel("spider")
+@register_fractal("spider")
 class Spider(FractalBase):
     """Spider fractal with dynamic c parameter."""
     
     name = "Spider"
     description = "Dynamic c parameter updating each iteration"
     parameters: Dict[str, Any] = {
-        'speed': {'type': 'float', 'min': 0.01, 'max': 0.5, 'default': 0.1}
+        'speed': {'type': 'float', 'min': 0.01, 'max': 0.5, 'default': 0.5}
     }
     
     def __init__(self):
-        self.speed = 0.1
+        self.speed = 0.5
     
     def get_default_bounds(self) -> Dict[str, float]:
         return {'xmin': -2.0, 'xmax': 2.0, 'ymin': -1.5, 'ymax': 1.5}

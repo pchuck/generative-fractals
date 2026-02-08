@@ -1,6 +1,8 @@
 """Newton's method fractal for z^3 - 1 = 0."""
 
 import numpy as np
+from typing import Dict, Any
+
 from . import FractalBase, register_fractal
 
 
@@ -47,9 +49,9 @@ class Newton(FractalBase):
         for i in range(max_iter):
             new_z = newton_update(z)
             if abs(new_z - z) < 1e-6:
-                root = get_root_index(z)
+                root = get_root_index(new_z)
                 if root >= 0:
-                    return root + i / max_iter
+                    return (root / 3.0) * max_iter
             z = new_z
         
-        return float(max_iter)
+        return float(max_iter * 2)

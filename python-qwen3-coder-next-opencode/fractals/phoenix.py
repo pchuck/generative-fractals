@@ -1,6 +1,8 @@
 """Phoenix fractal implementation."""
 
 import numpy as np
+from typing import Dict, Any
+
 from . import FractalBase, register_fractal
 
 
@@ -11,11 +13,11 @@ class Phoenix(FractalBase):
     name = "Phoenix"
     description = "Uses previous z value in iteration"
     parameters: Dict[str, Any] = {
-        'p': {'type': 'float', 'min': -2.0, 'max': 2.0, 'default': 0.5}
+        'p': {'type': 'complex', 'default': complex(-0.70176, 0.3842)}
     }
     
     def __init__(self):
-        self.p = 0.5
+        self.p = complex(-0.70176, 0.3842)
     
     def get_default_bounds(self) -> Dict[str, float]:
         return {'xmin': -2.0, 'xmax': 2.0, 'ymin': -2.0, 'ymax': 2.0}
@@ -39,5 +41,9 @@ class Phoenix(FractalBase):
     def set_parameters(self, params: Dict[str, Any]):
         """Set p parameter."""
         if 'p' in params:
-            self.p = float(params['p'])
+            p_val = params['p']
+            if isinstance(p_val, str):
+                self.p = complex(p_val)
+            else:
+                self.p = complex(p_val[0], p_val[1])
         super().set_parameters(params)

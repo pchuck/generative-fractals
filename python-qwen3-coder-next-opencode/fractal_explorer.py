@@ -11,8 +11,11 @@ except ImportError:
     print("Error: Pillow is required. Install with: pip install pillow")
     sys.exit(1)
 
+from typing import Union
+
 from fractals.mandelbrot import Mandelbrot
 from fractals.julia import Julia, JULIA_PRESETS
+from fractals import FractalBase
 from palettes.standard import (
     SmoothPalette, BandedPalette, GrayscalePalette,
     FirePalette, OceanPalette, RainbowPalette,

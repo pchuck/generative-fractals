@@ -9,6 +9,7 @@ class FractalBase(ABC):
     
     name: str = "Base Fractal"
     description: str = "Base fractal class"
+    parameters: Dict[str, Any] = {}
     
     @abstractmethod
     def get_default_bounds(self) -> Dict[str, float]:
@@ -22,7 +23,7 @@ class FractalBase(ABC):
     
     def get_parameters(self) -> Dict[str, Any]:
         """Get current parameters."""
-        return {}
+        return self.parameters.copy()
     
     def set_parameters(self, params: Dict[str, Any]):
         """Set parameters."""
@@ -55,7 +56,10 @@ class FractalRegistry:
 
 def register_fractal(name: str):
     """Convenience function to register a fractal."""
-    return FractalRegistry.register(name)
+    def decorator(fractal_class):
+        FractalRegistry._registry[name] = fractal_class
+        return fractal_class
+    return decorator
 
 
 __all__ = ['FractalBase', 'FractalRegistry', 'register_fractal']
