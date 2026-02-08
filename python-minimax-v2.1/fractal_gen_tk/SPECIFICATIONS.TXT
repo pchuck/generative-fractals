@@ -1,0 +1,234 @@
+================================================================================
+                     FRACTAL GENERATOR SPECIFICATION
+                              v1.0.0
+================================================================================
+
+A modular, interactive fractal explorer built with Python Tkinter featuring
+parallel computation, customizable palettes, and persistent session state.
+
+
+TABLE OF CONTENTS
+-----------------
+1. Core Features
+2. Fractal Types
+3. Color Palettes
+4. User Interface
+5. Performance & Architecture
+6. API Contracts
+7. Testing
+
+
+================================================================================
+1. CORE FEATURES
+================================================================================
+
+Interactive fractal exploration:
+  • Zoom in/out via mouse drag selection
+  • Real-time parameter adjustment for configurable fractals
+  • Adjustable iteration count (20-4096)
+  • Palette switching without re-rendering
+  • Export rendered images to JPEG
+
+Persistent session state per fractal type:
+  • View coordinates (x_min, x_max, y_min, y_max) cached individually
+  • Iteration limit cached individually
+
+
+================================================================================
+2. FRACTAL TYPES (7 total)
+================================================================================
+
+Standard Fractals:
+  • Mandelbrot Set              - Classic boundary visualization
+  • Julia Sets                  - Quadratic iteration with configurable c parameter
+  • Julia³ (Cubic)              - z³ + c iteration variant
+  • Burning Ship                | Asymmetric fractal using |z| on each iteration
+  • Collatz (Hailstone)         | 3n+1 conjecture visualization
+
+Exotic Fractals:
+  • Multibrot (z^n + c)         - Variable exponent, default n=4
+  • Phoenix                    - z_{n+1} = z_n² + c + p·z_{n-1}
+
+Default View Bounds per Type:
+  ┌─────────────────┬───────────────────────────────────────────────┐
+  │ Mandelbrot      │ (-2.0, 0.7) × (-1.3, 1.3)                     │
+  │ Julia           │ (-1.5, 1.5) × (-1.2, 1.2)                     │
+  │ Julia³          │ (-1.5, 1.5) × (-1.2, 1.2)                     │
+  │ Burning Ship    │ (-2.0, 0.7) × (-2.0, 0.6)                    │
+  │ Collatz         │ (-5.0, 5.0) × (-5.0, 5.0)                    │
+  │ Multibrot       │ (-2.0, 1.5) × (-1.5, 1.5)                    │
+  │ Phoenix         │ (-2.5, 1.5) × (-1.8, 1.8)                    │
+  └─────────────────┴───────────────────────────────────────────────┘
+
+
+================================================================================
+3. COLOR PALETTES (9 total)
+================================================================================
+
+Standard Palettes:
+  • Grayscale        - Monochrome gradient from black to white
+  • Plasma           - Purple → magenta → orange → yellow gradient
+  • Rainbow          - Full HSV color wheel rotation
+  • Cool             - Blue-cyan-purple spectrum
+  • Electric         - Blue-magenta contrast
+
+Specialty Palettes:
+  • Retro            - Sepia/vintage warm tones (dark brown for non-escaping)
+  • Sunset           - Purple → pink → orange → gold gradient
+  • Ocean            - Deep blue through cyan to white
+  • Alien            - Green with purple accents at high iterations
+
+Palette Function Semantics:
+  All palette functions receive (iter_count, max_iter):
+    iter_count: iteration at which point escaped (1 to max_iter)
+    max_iter:   if iter_count == max_iter, the point did NOT escape
+  
+  Convention: Return black (0, 0, 0) for non-escaping points,
+              except Retro which uses dark brown (15, 10, 5).
+
+
+================================================================================
+4. USER INTERFACE
+================================================================================
+
+Main Window:
+  • Canvas size: 800×600 pixels (expandable via window resize)
+  • Fractal selector dropdown
+  • Palette selector dropdown  
+  • Iteration slider (20-4096 range)
+  • Parallel toggle checkbox (default: ON)
+  • Reset View button
+  • Save JPG button
+
+Mouse Controls:
+  • Left-click + drag: draw selection rectangle for zoom area
+  • Selection automatically centers and zooms on release
+
+Parameter Panels (dynamically shown):
+  ┌─────────────────────────────────────────────────────────────┐
+  │ Julia/Julia³ Panel                                          │
+  │   c: [Real____] [+ imag_____] z₀: [real_][imag_]           │
+  ├─────────────────────────────────────────────────────────────┤
+  │ Multibrot Panel                                             │
+  │   Power: [3.0__] (adjustable from -3.0 to 10.0)            │
+  ├─────────────────────────────────────────────────────────────┤
+  │ Phoenix Panel                                               │
+  │   c: [real____][+ imag_____] p: [1.00_]                    │
+  └─────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+5. PERFORMANCE & ARCHITECTURE
+================================================================================
+
+Parallel Computation:
+  • Default: ENABLED (BooleanVar value=True)
+  • Uses ProcessPoolExecutor for multi-core rendering
+  • Automatic worker count adjustment based on canvas height:
+      workers = max(1, min(num_workers, max(1, height // 2)))
+  • Minimum 2 rows per worker to amortize overhead
+
+Memory Management:
+  • Lookup table: colors[0..max_iter] pre-computed for fast mapping
+  • Image data cached as PIL Image object
+  • Parallel strips computed independently then stitched
+
+Module Structure:
+  fractal_gen_tk/
+  ├── __init__.py           # Package exports (FractalFactory, PaletteFactory)
+  ├── fractals.py           # FractalType classes + FractalFactory
+  ├── palettes.py           # Palette functions + PaletteFactory  
+  ├── main_refactored.py    # Tkinter application
+  └── ui/                   # UI panels for fractal parameters
+      ├── __init__.py
+      ├── base.py          # BasePanel class
+      ├── julia_panel.py   # Julia³ parameter controls
+      ├── multibrot_panel.py
+      └── phoenix_panel.py
+
+Extensibility:
+  • New fractals: Inherit FractalType, implement calculate()
+  • New palettes: Define function matching (iter_count, max_iter) → RGB tuple
+
+
+================================================================================
+6. API CONTRACTS
+================================================================================
+
+FractalFactory
+--------------
+  list_types() -> list[str]
+    Returns display names for UI dropdown ("Julia³", "Burning Ship")
+
+  create(name: str | None = None) -> FractalType
+    Accepts display name or internal key, case-insensitive.
+    Examples:
+      "Mandelbrot" → Mandelbrot instance
+      "julia3"     → Julia3 instance  
+      "burning_ship" → BurningShip instance
+    Invalid names fall back to Mandelbrot.
+
+  register(name: str, fractal_class: type[FractalType))
+    Registers new fractal types.
+    Key is normalized via _normalize_name():
+      - Lowercase conversion
+      - '³' → '3'
+      - Spaces → underscores
+
+PaletteFactory
+--------------
+  list_names() -> list[str]
+    Returns palette keys in original case.
+
+  get(name: str) -> PaletteFunc
+    Case-insensitive lookup.
+    Invalid names return "Rainbow" fallback.
+
+  register(name: str, func: PaletteFunc)
+    Registration rules:
+      - No underscores → preserve user capitalization ("CustomGray")
+      - With underscores → Title-Case each segment ("my_test" → "My_Test")
+      - Removes case-insensitive duplicates before inserting
+
+FractalType (Abstract Base Class)
+---------------------------------
+  @property name: str           # Display name for UI
+  def calculate(x, y, max_iter) -> np.ndarray:
+    Returns iteration count array where:
+      - Values are 1..max_iter (iteration at escape)
+      - max_iter indicates point did NOT escape
+
+
+================================================================================
+7. TESTING
+================================================================================
+
+Test Coverage: 75 tests across 4 test files
+
+Running Tests:
+  # Target specific package to avoid collection conflicts
+  python -m pytest fractal_gen_tk/tests/ -v
+
+Test Files:
+  ├── test_fractals.py    (29 tests)
+  │   └─ Mandelbrot, Julia, Julia³, BurningShip, Collatz,
+  │      Multibrot, Phoenix, FractalFactory tests
+  ├── test_palettes.py    (17 tests)  
+  │   └─ All palette functions + PaletteFactory
+  ├── test_ui_panels.py   (11 tests)
+  │   └─ JuliaPanel, MultibrotPanel, PhoenixPanel creation & state
+  └── test_main.py        (8 tests)
+      └─ _camel_to_snake() utility, DEFAULT_BOUNDS lookup
+
+Key Test Scenarios:
+  • Output shape validation for all fractals
+  • Parameter mutation (set_c, set_z0, power modification)
+  • Palette gradient correctness
+  • Case-insensitive factory lookups
+  • Parallel worker calculation edge cases
+  • Display name ↔ internal key mapping consistency
+
+
+================================================================================
+                              END OF SPECIFICATION
+================================================================================

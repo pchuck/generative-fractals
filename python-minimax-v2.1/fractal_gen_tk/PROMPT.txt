@@ -1,0 +1,15 @@
+
+implement an interactive fractal generator in python
+
+* use python-tk for rendering
+* include the following ui elements:
+** drop-down to select from various fractal set types (mandelbrot, julia, etc)
+** drop-down menu to select from various color palettes
+** slider to increase/decrease the iteration limit
+* allow the user to select a rectangular area on the canvas to initiate a zoom
+* when zooming, first render existing data from the selection area expanded to fill the canvas, then overwrite that data with calculated pixels
+* produce a modular design that easily supports additional fractal types
+* easily support additional color palettes
+* initially support sequential processing; easily support parallel in the future
+
+
