@@ -1,1 +1,7 @@
+*~
 venv/
+
+# weak examples, produced without opencode
+python-glm-4.7-reap-218b-a32b-i1
+python-minimax-v2.1-reap-40-i1-q4_k_m/
+python-minimax-v2.1-reap-40-i1-q6_k/
