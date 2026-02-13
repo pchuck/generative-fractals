@@ -6,14 +6,17 @@ Interactive fractal explorer built with Rust, eframe/egui, and Rayon for paralle
 
 ## Features
 
-### Fractal Types (7)
+### Fractal Types (10)
 - **Mandelbrot** - Classic Mandelbrot set with adjustable power
-- **Julia** - Julia set with customizable c_real, c_imag parameters
+- **Julia** - Julia set with customizable c_real, c_imag parameters  
 - **Burning Ship** - Iterated with absolute values
 - **Tricorn** - Also known as Mandelbar (conjugated iteration)
 - **Celtic** - Variant with absolute value on real component
 - **Newton** - Newton's method visualization for z³ - 1 = 0
 - **Biomorph** - Modified Newton with escape conditions (biological patterns)
+- **Phoenix** - Julia variant with memory term creating flame-like patterns
+- **Multibrot** - Mandelbrot with arbitrary power (3+ gives more lobes)
+- **Spider** - Alternating Mandelbrot creating spiderweb patterns
 
 ### Color Palettes (5)
 - **Classic** - Rainbow gradient (black → blue → cyan → green → yellow → red → white)
@@ -28,6 +31,7 @@ Interactive fractal explorer built with Rust, eframe/egui, and Rayon for paralle
 - **Arrow Keys** - Pan view
 - **+ / -** - Zoom in/out by 1.5x
 - **R** - Reset view to defaults
+- **Shift+R** - Reset all settings (view, palette, parameters)
 - **S** - Save image (1x resolution)
 - **Ctrl+Z** - Undo last view change
 - **Ctrl+Y** - Redo view change
@@ -36,12 +40,19 @@ Interactive fractal explorer built with Rust, eframe/egui, and Rayon for paralle
 - **Mouse Coordinates** - Shows fractal coordinates (real, imaginary) under cursor
 - **Zoom Preview** - Blocky preview when zooming for instant feedback
 - **Progress Bar** - Shows rendering progress for large images
+- **Render Time** - Displays last render duration (e.g., "Last render: 450ms")
 - **Supersampling** - 2x supersampling for smoother edges (toggle in UI)
+- **Mini-map** - Small overview (150×150) showing full fractal with current view rectangle
 
 ### State Management
 - **Per-Fractal State** - Each fractal remembers its view position, zoom, iterations, and palette
 - **Undo/Redo** - 50-step history of view changes
-- **Configuration File** - Saves window size, defaults, and settings to `~/.config/fractal-explorer/config.json`
+- **Bookmarks** - Save interesting locations with names, including position, zoom, iterations, and palette
+- **Configuration File** - Saves window size, defaults, bookmarks, and settings to `~/.config/fractal-explorer/config.json`
+
+### Smart Features
+- **Adaptive Iterations** - Automatically increases max iterations as you zoom (prevents loss of detail at deep zoom levels)
+- **Anti-Aliasing** - Supersampling option for smoother edges
 
 ### Export Options
 - **1x (Current)** - Fast save of cached image
@@ -74,15 +85,17 @@ cargo clippy -- -D warnings
 | +/- | Zoom in/out |
 | Arrow Keys | Pan view |
 | R | Reset view |
-| S | Save image |
+| Shift+R | Reset all settings |
 | Ctrl+Z | Undo |
 | Ctrl+Y | Redo |
+| S | Save image |
 
 ## Parameters
 
 ### Fractal-Specific
-- **Power** (Mandelbrot, Julia, Burning Ship, Tricorn, Celtic) - Exponent value (1.0-8.0)
-- **c_real / c_imag** (Julia) - Julia set constant (-2.0 to 2.0)
+- **Power** (Mandelbrot, Burning Ship, Tricorn, Celtic, Multibrot, Spider) - Exponent value (1.0-10.0)
+- **c_real / c_imag** (Julia, Phoenix) - Fractal constant (-2.0 to 2.0)
+- **Memory** (Phoenix) - Memory parameter creating flame effects (-1.0 to 1.0)
 - **Escape Radius** (Newton, Biomorph) - Convergence threshold (4.0-64.0)
 - **Tolerance** (Newton, Biomorph) - Root detection sensitivity (0.0001-0.1)
 
@@ -90,6 +103,15 @@ cargo clippy -- -D warnings
 - **Iterations** - Maximum iteration count (16-2000)
 - **Color Offset** (Psychedelic palette) - Color rotation (0.0-1.0)
 - **Supersampling** - Enable 2x supersampling for smoother edges
+- **Adaptive Iterations** - Auto-adjust iterations based on zoom level
+
+## Bookmarks
+
+Save interesting locations for later:
+- Click "Bookmark" button to save current view
+- Each bookmark saves: name, fractal type, position, zoom, iterations, palette
+- Click bookmark name to restore that view
+- Bookmarks persist across sessions in config file
 
 ## Configuration
 
@@ -99,11 +121,12 @@ Settings are automatically saved to:
 - **Windows**: `%APPDATA%\fractal-explorer\config.json`
 
 Saved settings include:
-- Window size
-- Default fractal type
-- Default palette
+- Window size and position
+- Default fractal type and palette
 - Default iteration count
 - Supersampling preference
+- Adaptive iterations setting
+- All bookmarks
 
 ## Architecture
 
@@ -111,7 +134,7 @@ Saved settings include:
 src/
 ├── main.rs           # Application entry, event loop, state management
 ├── ui/mod.rs         # Control panel UI components
-├── fractal/mod.rs    # Fractal trait & 7 implementations
+├── fractal/mod.rs    # Fractal trait & 10 implementations
 ├── palette/mod.rs    # Color palette system (5 palettes)
 └── renderer/mod.rs   # Screen-to-fractal coordinate mapping
 ```
@@ -121,12 +144,13 @@ src/
 **FractalApp**: Main application state managing:
 - View state per fractal type
 - Undo/redo history
-- Incremental rendering
+- Incremental rendering with timing
 - Supersampling buffers
+- Bookmarks
 
 **ViewHistory**: Manages undo/redo stack (50 entries max)
 
-**Incremental Rendering**: Renders fractal in chunks for UI responsiveness
+**Incremental Rendering**: Renders fractal in chunks for UI responsiveness with progress updates
 
 ## Dependencies
 
@@ -141,6 +165,7 @@ src/
 - **Disable supersampling** for faster navigation
 - **Lower iterations** when exploring (increase for final renders)
 - **Use 1x export** for quick saves, 2x/4x for high quality
+- **Enable adaptive iterations** for automatic quality adjustment at different zoom levels
 - Rendering is CPU-parallel using all available cores
 
 ## License

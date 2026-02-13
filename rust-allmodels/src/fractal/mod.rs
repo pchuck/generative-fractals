@@ -10,6 +10,9 @@ pub enum FractalType {
     Celtic,
     Newton,
     Biomorph,
+    Phoenix,
+    Multibrot,
+    Spider,
 }
 
 impl FractalType {
@@ -24,6 +27,9 @@ impl FractalType {
             FractalType::Celtic => (0.0, 0.0),
             FractalType::Newton => (0.0, 0.0),
             FractalType::Biomorph => (0.0, 0.0),
+            FractalType::Phoenix => (0.0, 0.0),
+            FractalType::Multibrot => (0.0, 0.0),
+            FractalType::Spider => (0.0, 0.0),
         }
     }
 }
@@ -664,6 +670,258 @@ impl Fractal for Biomorph {
     }
 }
 
+// ============================================================================
+// Phoenix Fractal
+// ============================================================================
+
+/// Phoenix fractal - a variation with memory term.
+///
+/// Similar to Julia but includes the previous iteration value:
+/// z_{n+1} = z_n^2 + c + p * z_{n-1}
+/// where p is the "memory" parameter.
+///
+/// Creates flame-like and spiral patterns.
+pub struct Phoenix {
+    pub c_real: f64,
+    pub c_imag: f64,
+    pub memory: f64,
+}
+
+impl Default for Phoenix {
+    fn default() -> Self {
+        Phoenix {
+            c_real: 0.5667,
+            c_imag: -0.5,
+            memory: 0.5,
+        }
+    }
+}
+
+impl Fractal for Phoenix {
+    fn name(&self) -> &str {
+        "Phoenix"
+    }
+
+    fn parameters(&self) -> Vec<Parameter> {
+        vec![
+            Parameter {
+                name: "c_real".to_string(),
+                value: self.c_real,
+                min: -2.0,
+                max: 2.0,
+            },
+            Parameter {
+                name: "c_imag".to_string(),
+                value: self.c_imag,
+                min: -2.0,
+                max: 2.0,
+            },
+            Parameter {
+                name: "memory".to_string(),
+                value: self.memory,
+                min: -1.0,
+                max: 1.0,
+            },
+        ]
+    }
+
+    fn set_parameter(&mut self, name: &str, value: f64) {
+        match name {
+            "c_real" => self.c_real = value.clamp(-2.0, 2.0),
+            "c_imag" => self.c_imag = value.clamp(-2.0, 2.0),
+            "memory" => self.memory = value.clamp(-1.0, 1.0),
+            _ => {}
+        }
+    }
+
+    fn get_parameter(&self, name: &str) -> Option<f64> {
+        match name {
+            "c_real" => Some(self.c_real),
+            "c_imag" => Some(self.c_imag),
+            "memory" => Some(self.memory),
+            _ => None,
+        }
+    }
+
+    fn compute(&self, cx: f64, cy: f64, max_iter: u32) -> u32 {
+        let mut z_re = cx;
+        let mut z_im = cy;
+        let mut z_prev_re = 0.0;
+        let mut z_prev_im = 0.0;
+        let c_re = self.c_real;
+        let c_im = self.c_imag;
+        let p = self.memory;
+
+        for i in 0..max_iter {
+            let r2 = z_re * z_re;
+            let i2 = z_im * z_im;
+
+            if r2 + i2 > 4.0 {
+                return i;
+            }
+
+            // z^2 + c + p * z_prev
+            let new_re = r2 - i2 + c_re + p * z_prev_re;
+            let new_im = 2.0 * z_re * z_im + c_im + p * z_prev_im;
+
+            z_prev_re = z_re;
+            z_prev_im = z_im;
+            z_re = new_re;
+            z_im = new_im;
+        }
+
+        max_iter
+    }
+}
+
+// ============================================================================
+// Multibrot Fractal
+// ============================================================================
+
+/// Multibrot fractal - Mandelbrot with arbitrary power.
+///
+/// z_{n+1} = z_n^power + c
+///
+/// Power 2 gives standard Mandelbrot, power 3 gives "Mandelbar" (not to be confused with Tricorn),
+/// higher powers create more lobes.
+pub struct Multibrot {
+    pub power: f64,
+}
+
+impl Default for Multibrot {
+    fn default() -> Self {
+        Multibrot { power: 3.0 }
+    }
+}
+
+impl Fractal for Multibrot {
+    fn name(&self) -> &str {
+        "Multibrot"
+    }
+
+    fn parameters(&self) -> Vec<Parameter> {
+        vec![Parameter {
+            name: "power".to_string(),
+            value: self.power,
+            min: 2.0,
+            max: 10.0,
+        }]
+    }
+
+    fn set_parameter(&mut self, name: &str, value: f64) {
+        if name == "power" {
+            self.power = value.clamp(2.0, 10.0);
+        }
+    }
+
+    fn get_parameter(&self, name: &str) -> Option<f64> {
+        match name {
+            "power" => Some(self.power),
+            _ => None,
+        }
+    }
+
+    fn compute(&self, cx: f64, cy: f64, max_iter: u32) -> u32 {
+        let mut z_re: f64 = 0.0;
+        let mut z_im: f64 = 0.0;
+        let c_re = cx;
+        let c_im = cy;
+        let power = self.power;
+
+        for i in 0..max_iter {
+            let r2 = z_re * z_re;
+            let i2 = z_im * z_im;
+
+            if r2 + i2 > 4.0 {
+                return i;
+            }
+
+            // Use De Moivre's theorem: (r*e^(iθ))^power = r^power * e^(i*power*θ)
+            let angle = power * z_im.atan2(z_re);
+            let radius = (r2 + i2).powf(power / 2.0);
+
+            z_re = radius * angle.cos() + c_re;
+            z_im = radius * angle.sin() + c_im;
+        }
+
+        max_iter
+    }
+}
+
+// ============================================================================
+// Spider Fractal
+// ============================================================================
+
+/// Spider fractal - a modified Mandelbrot with alternating pattern.
+///
+/// Alternates between z^2 + c and z^2 - c every other iteration,
+/// creating spiderweb-like patterns.
+pub struct Spider {
+    pub power: f64,
+}
+
+impl Default for Spider {
+    fn default() -> Self {
+        Spider { power: 2.0 }
+    }
+}
+
+impl Fractal for Spider {
+    fn name(&self) -> &str {
+        "Spider"
+    }
+
+    fn parameters(&self) -> Vec<Parameter> {
+        vec![Parameter {
+            name: "power".to_string(),
+            value: self.power,
+            min: 1.0,
+            max: 5.0,
+        }]
+    }
+
+    fn set_parameter(&mut self, name: &str, value: f64) {
+        if name == "power" {
+            self.power = value.clamp(1.0, 5.0);
+        }
+    }
+
+    fn get_parameter(&self, name: &str) -> Option<f64> {
+        match name {
+            "power" => Some(self.power),
+            _ => None,
+        }
+    }
+
+    fn compute(&self, cx: f64, cy: f64, max_iter: u32) -> u32 {
+        let mut z_re: f64 = 0.0;
+        let mut z_im: f64 = 0.0;
+        let c_re = cx;
+        let c_im = cy;
+        let power = self.power;
+
+        for i in 0..max_iter {
+            let r2 = z_re * z_re;
+            let i2 = z_im * z_im;
+
+            if r2 + i2 > 4.0 {
+                return i;
+            }
+
+            // Use De Moivre's theorem
+            let angle = power * z_im.atan2(z_re);
+            let radius = (r2 + i2).powf(power / 2.0);
+
+            // Alternate between +c and -c
+            let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
+            z_re = radius * angle.cos() + sign * c_re;
+            z_im = radius * angle.sin() + sign * c_im;
+        }
+
+        max_iter
+    }
+}
+
 /// Factory function to create fractal instances.
 pub fn create_fractal(fractal_type: FractalType) -> Box<dyn Fractal> {
     match fractal_type {
@@ -674,6 +932,9 @@ pub fn create_fractal(fractal_type: FractalType) -> Box<dyn Fractal> {
         FractalType::Celtic => Box::new(Celtic::default()),
         FractalType::Newton => Box::new(Newton::default()),
         FractalType::Biomorph => Box::new(Biomorph::default()),
+        FractalType::Phoenix => Box::new(Phoenix::default()),
+        FractalType::Multibrot => Box::new(Multibrot::default()),
+        FractalType::Spider => Box::new(Spider::default()),
     }
 }
 

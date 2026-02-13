@@ -187,6 +187,8 @@ struct FractalApp {
     zoom_preview: Option<ZoomPreview>,
     render_progress: f32,
     is_rendering: bool,
+    render_start_time: Option<Instant>,
+    last_render_time: Option<f64>, // in seconds
     status_message: Option<(String, Instant)>,
     mouse_fractal_pos: Option<(f64, f64)>,
     view_history: ViewHistory,
@@ -225,6 +227,9 @@ impl FractalApp {
             FractalType::Celtic,
             FractalType::Newton,
             FractalType::Biomorph,
+            FractalType::Phoenix,
+            FractalType::Multibrot,
+            FractalType::Spider,
         ] {
             let (cx, cy) = ft.default_center();
             views.insert(
@@ -263,6 +268,8 @@ impl FractalApp {
             zoom_preview: None,
             render_progress: 0.0,
             is_rendering: false,
+            render_start_time: None,
+            last_render_time: None,
             status_message: None,
             mouse_fractal_pos: None,
             view_history: ViewHistory::new(50),
@@ -354,6 +361,9 @@ impl FractalApp {
             FractalType::Celtic => "celtic",
             FractalType::Newton => "newton",
             FractalType::Biomorph => "biomorph",
+            FractalType::Phoenix => "phoenix",
+            FractalType::Multibrot => "multibrot",
+            FractalType::Spider => "spider",
         };
         let palette_name = match self.controls.palette_type {
             PaletteType::Classic => "classic",
@@ -946,6 +956,16 @@ impl eframe::App for FractalApp {
                     ui.add(egui::ProgressBar::new(self.render_progress).desired_width(200.0));
                 }
 
+                // Show last render time
+                if let Some(render_time) = self.last_render_time {
+                    ui.separator();
+                    if render_time < 1.0 {
+                        ui.label(format!("Last render: {:.0}ms", render_time * 1000.0));
+                    } else {
+                        ui.label(format!("Last render: {:.2}s", render_time));
+                    }
+                }
+
                 ui.separator();
                 ui.label("Keyboard:");
                 ui.label("+/- : Zoom in/out");
@@ -1284,6 +1304,12 @@ impl eframe::App for FractalApp {
                     self.render_progress = 0.0;
                     self.zoom_preview = None;
                     self.render_chunk_start = 0;
+
+                    // Calculate and store render time
+                    if let Some(start_time) = self.render_start_time.take() {
+                        self.last_render_time = Some(start_time.elapsed().as_secs_f64());
+                    }
+
                     ctx.request_repaint();
                 }
             }
@@ -1326,6 +1352,7 @@ impl eframe::App for FractalApp {
                 }
 
                 self.is_rendering = true;
+                self.render_start_time = Some(Instant::now());
                 self.render_progress = 0.0;
                 ctx.request_repaint();
             }

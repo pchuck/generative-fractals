@@ -43,6 +43,9 @@ impl FractalControls {
                 FractalType::Celtic => "Celtic",
                 FractalType::Newton => "Newton",
                 FractalType::Biomorph => "Biomorph",
+                FractalType::Phoenix => "Phoenix",
+                FractalType::Multibrot => "Multibrot",
+                FractalType::Spider => "Spider",
             })
             .show_ui(ui, |ui| {
                 ui.selectable_value(
@@ -60,6 +63,9 @@ impl FractalControls {
                 ui.selectable_value(&mut self.fractal_type, FractalType::Celtic, "Celtic");
                 ui.selectable_value(&mut self.fractal_type, FractalType::Newton, "Newton");
                 ui.selectable_value(&mut self.fractal_type, FractalType::Biomorph, "Biomorph");
+                ui.selectable_value(&mut self.fractal_type, FractalType::Phoenix, "Phoenix");
+                ui.selectable_value(&mut self.fractal_type, FractalType::Multibrot, "Multibrot");
+                ui.selectable_value(&mut self.fractal_type, FractalType::Spider, "Spider");
             });
 
         ui.separator();
