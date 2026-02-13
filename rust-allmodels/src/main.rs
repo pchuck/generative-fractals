@@ -19,6 +19,7 @@ pub struct FractalViewState {
     pub zoom: f64,
     pub max_iterations: u32,
     pub fractal_params: HashMap<String, f64>,
+    pub palette_type: PaletteType,
 }
 
 struct FractalApp {
@@ -59,7 +60,7 @@ struct FractalControls {
     palette_offset: f32,
     pending_max_iterations: u32,
     pending_palette_offset: f32,
-    pending_fractal_params: std::collections::HashMap<String, f64>,
+    pending_fractal_params: HashMap<String, f64>,
 }
 
 impl Default for FractalControls {
@@ -71,7 +72,7 @@ impl Default for FractalControls {
             palette_offset: 0.0,
             pending_max_iterations: 200,
             pending_palette_offset: 0.0,
-            pending_fractal_params: std::collections::HashMap::new(),
+            pending_fractal_params: HashMap::new(),
         }
     }
 }
@@ -87,6 +88,7 @@ impl Default for FractalApp {
                 zoom: 1.0,
                 max_iterations: 200,
                 fractal_params: HashMap::new(),
+                palette_type: PaletteType::Classic,
             },
         );
         views.insert(
@@ -97,6 +99,7 @@ impl Default for FractalApp {
                 zoom: 1.0,
                 max_iterations: 200,
                 fractal_params: HashMap::new(),
+                palette_type: PaletteType::Classic,
             },
         );
         views.insert(
@@ -107,6 +110,7 @@ impl Default for FractalApp {
                 zoom: 1.0,
                 max_iterations: 200,
                 fractal_params: HashMap::new(),
+                palette_type: PaletteType::Classic,
             },
         );
 
@@ -133,6 +137,7 @@ impl Default for FractalApp {
                 zoom: 1.0,
                 max_iterations: 200,
                 fractal_params: HashMap::new(),
+                palette_type: PaletteType::Classic,
             },
             render_target_max_iter: 200,
             render_target_palette_offset: 0.0,
@@ -190,6 +195,7 @@ impl FractalApp {
 
     fn reset_view(&mut self) {
         let current_max_iter = self.controls.max_iterations;
+        let current_palette = self.controls.palette_type;
         let current_params = self
             .views
             .get(&self.controls.fractal_type)
@@ -202,6 +208,7 @@ impl FractalApp {
                 zoom: 1.0,
                 max_iterations: current_max_iter,
                 fractal_params: current_params,
+                palette_type: current_palette,
             },
             FractalType::Julia => FractalViewState {
                 center_x: 0.0,
@@ -209,6 +216,7 @@ impl FractalApp {
                 zoom: 1.0,
                 max_iterations: current_max_iter,
                 fractal_params: current_params,
+                palette_type: current_palette,
             },
             FractalType::BurningShip => FractalViewState {
                 center_x: -0.5,
@@ -216,6 +224,7 @@ impl FractalApp {
                 zoom: 1.0,
                 max_iterations: current_max_iter,
                 fractal_params: current_params,
+                palette_type: current_palette,
             },
         };
         self.views.insert(self.controls.fractal_type, default_view);
@@ -237,6 +246,8 @@ impl eframe::App for FractalApp {
                         self.controls.max_iterations = view.max_iterations;
                         self.controls.pending_max_iterations = view.max_iterations;
                         self.controls.pending_fractal_params = view.fractal_params.clone();
+                        self.controls.palette_type = view.palette_type;
+                        self.controls.pending_palette_offset = self.controls.palette_offset;
                         for (name, value) in &view.fractal_params {
                             self.fractal.set_parameter(name, *value);
                         }
@@ -248,6 +259,7 @@ impl eframe::App for FractalApp {
                     if let Some(view) = self.views.get_mut(&self.controls.fractal_type) {
                         view.max_iterations = self.controls.max_iterations;
                         view.fractal_params = self.controls.pending_fractal_params.clone();
+                        view.palette_type = self.controls.palette_type;
                     }
                     self.needs_render = true;
                 }
@@ -357,6 +369,7 @@ impl eframe::App for FractalApp {
                             zoom: new_zoom,
                             max_iterations: self.controls.max_iterations,
                             fractal_params: view.fractal_params.clone(),
+                            palette_type: self.controls.palette_type,
                         });
                         self.render_delay = 2;
                     }
@@ -456,12 +469,10 @@ impl eframe::App for FractalApp {
                                     } else {
                                         let t =
                                             iterations as f32 / self.render_target_max_iter as f32;
-                                        let adjusted_t =
-                                            (t + self.render_target_palette_offset) % 1.0;
                                         palette::get_color(
                                             self.render_target_palette_type,
-                                            adjusted_t,
-                                            0.0,
+                                            t,
+                                            self.render_target_palette_offset,
                                         )
                                     }
                                 })
