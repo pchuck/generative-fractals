@@ -1,4 +1,5 @@
 use eframe::egui::Color32;
+use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
 // Global singleton instances for each palette type
@@ -10,7 +11,7 @@ static GRAYSCALE_PALETTE: OnceLock<GrayscalePalette> = OnceLock::new();
 static PSYCHEDELIC_PALETTE: OnceLock<PsychedelicPalette> = OnceLock::new();
 
 /// Available color palette types for fractal rendering.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub enum PaletteType {
     #[default]
     Classic,
