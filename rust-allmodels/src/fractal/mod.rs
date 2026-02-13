@@ -14,11 +14,12 @@ pub struct Parameter {
     pub max: f64,
 }
 
-#[allow(dead_code)]
 pub trait Fractal: Send + Sync {
+    #[allow(dead_code)]
     fn name(&self) -> &str;
     fn parameters(&self) -> Vec<Parameter>;
     fn set_parameter(&mut self, name: &str, value: f64);
+    #[allow(dead_code)]
     fn get_parameter(&self, name: &str) -> Option<f64>;
     fn compute(&self, cx: f64, cy: f64, max_iter: u32) -> u32;
 }

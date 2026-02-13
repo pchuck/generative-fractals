@@ -454,7 +454,6 @@ impl eframe::App for FractalApp {
                         .flat_map(|y| {
                             (0..width)
                                 .map(|x| {
-                                    use renderer::screen_to_fractal;
                                     let (px, py) = screen_to_fractal(
                                         x,
                                         y,
@@ -482,11 +481,9 @@ impl eframe::App for FractalApp {
 
                     // Copy to pixel buffer
                     if let Some(ref mut pixels) = self.render_pixels {
-                        for (i, color) in chunk_pixels.iter().enumerate() {
-                            let y = y_start + i / width as usize;
-                            let x = i % width as usize;
-                            pixels[y * width as usize + x] = *color;
-                        }
+                        let start_idx = y_start * width as usize;
+                        let chunk_len = (y_end - y_start) * width as usize;
+                        pixels[start_idx..start_idx + chunk_len].copy_from_slice(&chunk_pixels);
                     }
 
                     self.render_chunk_start = y_end;

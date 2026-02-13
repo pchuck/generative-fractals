@@ -1,4 +1,11 @@
 use eframe::egui::Color32;
+use std::sync::OnceLock;
+
+static CLASSIC_PALETTE: OnceLock<ClassicPalette> = OnceLock::new();
+static FIRE_PALETTE: OnceLock<FirePalette> = OnceLock::new();
+static ICE_PALETTE: OnceLock<IcePalette> = OnceLock::new();
+static GRAYSCALE_PALETTE: OnceLock<GrayscalePalette> = OnceLock::new();
+static PSYCHEDELIC_PALETTE: OnceLock<PsychedelicPalette> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum PaletteType {
@@ -10,8 +17,8 @@ pub enum PaletteType {
     Psychedelic,
 }
 
-#[allow(dead_code)]
 pub trait Palette: Send + Sync {
+    #[allow(dead_code)]
     fn name(&self) -> &str;
     fn color(&self, t: f32) -> Color32;
 }
@@ -195,10 +202,16 @@ pub fn get_color(palette_type: PaletteType, t: f32, offset: f32) -> Color32 {
     };
 
     match palette_type {
-        PaletteType::Classic => ClassicPalette {}.color(adjusted_t),
-        PaletteType::Fire => FirePalette {}.color(adjusted_t),
-        PaletteType::Ice => IcePalette {}.color(adjusted_t),
-        PaletteType::Grayscale => GrayscalePalette {}.color(adjusted_t),
-        PaletteType::Psychedelic => PsychedelicPalette {}.color(adjusted_t),
+        PaletteType::Classic => CLASSIC_PALETTE
+            .get_or_init(|| ClassicPalette)
+            .color(adjusted_t),
+        PaletteType::Fire => FIRE_PALETTE.get_or_init(|| FirePalette).color(adjusted_t),
+        PaletteType::Ice => ICE_PALETTE.get_or_init(|| IcePalette).color(adjusted_t),
+        PaletteType::Grayscale => GRAYSCALE_PALETTE
+            .get_or_init(|| GrayscalePalette)
+            .color(adjusted_t),
+        PaletteType::Psychedelic => PSYCHEDELIC_PALETTE
+            .get_or_init(|| PsychedelicPalette)
+            .color(adjusted_t),
     }
 }
