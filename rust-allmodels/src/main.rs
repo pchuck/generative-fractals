@@ -25,6 +25,8 @@ struct AppConfig {
     default_fractal: FractalType,
     default_palette: PaletteType,
     supersampling_enabled: bool,
+    adaptive_iterations: bool,
+    bookmarks: Vec<Bookmark>,
 }
 
 impl Default for AppConfig {
@@ -36,6 +38,8 @@ impl Default for AppConfig {
             default_fractal: FractalType::Mandelbrot,
             default_palette: PaletteType::Classic,
             supersampling_enabled: false,
+            adaptive_iterations: false,
+            bookmarks: Vec::new(),
         }
     }
 }
@@ -65,6 +69,18 @@ impl AppConfig {
         std::fs::write(&path, json).map_err(|e| format!("Failed to write config: {}", e))?;
         Ok(())
     }
+}
+
+/// Bookmark for saving interesting locations
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct Bookmark {
+    name: String,
+    fractal_type: FractalType,
+    center_x: f64,
+    center_y: f64,
+    zoom: f64,
+    max_iterations: u32,
+    palette_type: PaletteType,
 }
 
 #[derive(Clone, Default)]
@@ -176,6 +192,11 @@ struct FractalApp {
     view_history: ViewHistory,
     last_saved_view: Option<(FractalType, FractalViewState)>,
     supersampling_enabled: bool,
+    adaptive_iterations: bool,
+    bookmarks: Vec<Bookmark>,
+    show_bookmark_dialog: bool,
+    bookmark_name_input: String,
+    minimap_enabled: bool,
     // Incremental rendering state
     render_target_width: u32,
     render_target_height: u32,
@@ -247,6 +268,11 @@ impl FractalApp {
             view_history: ViewHistory::new(50),
             last_saved_view: None,
             supersampling_enabled: config.supersampling_enabled,
+            adaptive_iterations: config.adaptive_iterations,
+            bookmarks: config.bookmarks.clone(),
+            show_bookmark_dialog: false,
+            bookmark_name_input: String::new(),
+            minimap_enabled: false,
             render_target_width: 0,
             render_target_height: 0,
             render_target_view: FractalViewState {
@@ -281,6 +307,18 @@ impl FractalApp {
 
     fn set_view(&mut self, view: FractalViewState) {
         self.views.insert(self.controls.fractal_type, view);
+    }
+
+    fn calculate_adaptive_iterations(&self, zoom: f64) -> u32 {
+        // Base iterations + additional iterations based on zoom level
+        // Formula: base + 50 * log2(zoom)
+        // At zoom 1: base iterations
+        // At zoom 10: base + ~166 iterations
+        // At zoom 100: base + ~332 iterations
+        let base_iter = self.controls.max_iterations;
+        let zoom_factor = if zoom > 1.0 { zoom.log2() } else { 0.0 };
+        let additional = (50.0 * zoom_factor) as u32;
+        (base_iter + additional).min(2000) // Cap at 2000
     }
 
     fn save_view_to_history(&mut self) {
@@ -363,7 +401,11 @@ impl FractalApp {
         height: u32,
     ) -> Result<(), String> {
         let view = self.get_view();
-        let max_iter = self.controls.max_iterations;
+        let max_iter = if self.adaptive_iterations {
+            self.calculate_adaptive_iterations(view.zoom)
+        } else {
+            self.controls.max_iterations
+        };
         let palette_type = self.controls.palette_type;
         let palette_offset = self.controls.palette_offset;
 
@@ -415,10 +457,47 @@ impl FractalApp {
         self.views.insert(self.controls.fractal_type, default_view);
     }
 
+    fn reset_settings(&mut self) {
+        // Reset everything for current fractal to factory defaults
+        let (center_x, center_y) = self.controls.fractal_type.default_center();
+        let default_view = FractalViewState {
+            center_x,
+            center_y,
+            zoom: 1.0,
+            max_iterations: 200,
+            fractal_params: HashMap::new(),
+            palette_type: PaletteType::Classic,
+        };
+        self.views.insert(self.controls.fractal_type, default_view);
+
+        // Reset controls
+        self.controls.max_iterations = 200;
+        self.controls.pending_max_iterations = 200;
+        self.controls.palette_type = PaletteType::Classic;
+        self.controls.pending_palette_offset = 0.0;
+        self.controls.palette_offset = 0.0;
+
+        // Reset fractal parameters to defaults
+        self.fractal = create_fractal(self.controls.fractal_type);
+        self.controls.pending_fractal_params.clear();
+
+        self.needs_render = true;
+        self.set_status("Settings reset".to_string());
+    }
+
     fn zoom_view(&mut self, factor: f64) {
         self.save_view_to_history();
         let mut view = self.get_view();
         view.zoom *= factor;
+
+        // If adaptive iterations is enabled, update max_iterations
+        if self.adaptive_iterations {
+            let new_iter = self.calculate_adaptive_iterations(view.zoom);
+            view.max_iterations = new_iter;
+            self.controls.max_iterations = new_iter;
+            self.controls.pending_max_iterations = new_iter;
+        }
+
         self.set_view(view);
         self.needs_render = true;
     }
@@ -453,6 +532,53 @@ impl FractalApp {
         }
     }
 
+    fn add_bookmark(&mut self, name: String) {
+        let view = self.get_view();
+        let bookmark = Bookmark {
+            name,
+            fractal_type: self.controls.fractal_type,
+            center_x: view.center_x,
+            center_y: view.center_y,
+            zoom: view.zoom,
+            max_iterations: view.max_iterations,
+            palette_type: view.palette_type,
+        };
+        self.bookmarks.push(bookmark);
+        self.set_status("Bookmark saved".to_string());
+    }
+
+    fn delete_bookmark(&mut self, index: usize) {
+        if index < self.bookmarks.len() {
+            self.bookmarks.remove(index);
+            self.set_status("Bookmark deleted".to_string());
+        }
+    }
+
+    fn load_bookmark(&mut self, index: usize) {
+        if let Some(bookmark) = self.bookmarks.get(index).cloned() {
+            self.save_view_to_history();
+            self.controls.fractal_type = bookmark.fractal_type;
+            self.fractal = create_fractal(bookmark.fractal_type);
+
+            let view = FractalViewState {
+                center_x: bookmark.center_x,
+                center_y: bookmark.center_y,
+                zoom: bookmark.zoom,
+                max_iterations: bookmark.max_iterations,
+                fractal_params: HashMap::new(),
+                palette_type: bookmark.palette_type,
+            };
+            self.views.insert(bookmark.fractal_type, view);
+
+            self.controls.max_iterations = bookmark.max_iterations;
+            self.controls.pending_max_iterations = bookmark.max_iterations;
+            self.controls.palette_type = bookmark.palette_type;
+
+            self.needs_render = true;
+            self.set_status(format!("Loaded: {}", bookmark.name));
+        }
+    }
+
     fn set_status(&mut self, message: String) {
         self.status_message = Some((message, Instant::now()));
     }
@@ -480,63 +606,145 @@ impl FractalApp {
             self.mouse_fractal_pos = None;
         }
     }
+
+    fn render_minimap(&self, ctx: &egui::Context) -> Option<egui::TextureHandle> {
+        if !self.minimap_enabled {
+            return None;
+        }
+
+        let minimap_size = 150;
+        let mut pixels = vec![egui::Color32::BLACK; minimap_size * minimap_size];
+
+        // Render a simplified version of the fractal
+        let view = self.get_view();
+        let max_iter = 50; // Low quality for speed
+
+        // For the minimap, we show the full fractal at zoom level 1
+        // with a rectangle showing current view
+        let minimap_view = FractalViewState {
+            center_x: self.controls.fractal_type.default_center().0,
+            center_y: self.controls.fractal_type.default_center().1,
+            zoom: 1.0,
+            max_iterations: max_iter,
+            fractal_params: view.fractal_params.clone(),
+            palette_type: view.palette_type,
+        };
+
+        for y in 0..minimap_size {
+            for x in 0..minimap_size {
+                let (px, py) = screen_to_fractal(
+                    x as u32,
+                    y as u32,
+                    minimap_size as u32,
+                    minimap_size as u32,
+                    &minimap_view,
+                );
+                let iterations = self.fractal.compute(px, py, max_iter);
+                let color = if iterations >= max_iter {
+                    egui::Color32::BLACK
+                } else {
+                    let t = iterations as f32 / max_iter as f32;
+                    palette::get_color(view.palette_type, t, 0.0)
+                };
+                pixels[y * minimap_size + x] = color;
+            }
+        }
+
+        // Draw view rectangle
+        // Calculate where the current view would be on the minimap
+        let default_center = self.controls.fractal_type.default_center();
+        let view_width = 4.0 / view.zoom; // Width in fractal coordinates
+        let view_height = view_width; // Square aspect
+
+        // Map view center to minimap coordinates
+        let map_range = 4.0; // Minimap shows -2 to 2 range
+        let rel_x = (view.center_x - default_center.0 + map_range / 2.0) / map_range;
+        let rel_y = (view.center_y - default_center.1 + map_range / 2.0) / map_range;
+
+        let rect_x = (rel_x * minimap_size as f64) as i32;
+        let rect_y = (rel_y * minimap_size as f64) as i32;
+        let rect_w = ((view_width / map_range) * minimap_size as f64) as i32;
+        let rect_h = ((view_height / map_range) * minimap_size as f64) as i32;
+
+        // Draw rectangle outline
+        for dy in -rect_h / 2..=rect_h / 2 {
+            for dx in -rect_w / 2..=rect_w / 2 {
+                if dx == -rect_w / 2 || dx == rect_w / 2 || dy == -rect_h / 2 || dy == rect_h / 2 {
+                    let px = rect_x + dx;
+                    let py = rect_y + dy;
+                    if px >= 0 && px < minimap_size as i32 && py >= 0 && py < minimap_size as i32 {
+                        pixels[py as usize * minimap_size + px as usize] = egui::Color32::YELLOW;
+                    }
+                }
+            }
+        }
+
+        let image = egui::ColorImage {
+            size: [minimap_size, minimap_size],
+            pixels,
+        };
+
+        Some(ctx.load_texture("minimap", image, egui::TextureOptions::default()))
+    }
 }
 
 impl eframe::App for FractalApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.check_status_timeout();
 
-        // Handle keyboard input
-        ctx.input(|i| {
-            // Zoom controls: +/- keys
-            if i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals) {
-                self.zoom_view(1.5);
-            }
-            if i.key_pressed(egui::Key::Minus) {
-                self.zoom_view(1.0 / 1.5);
-            }
+        // Handle keyboard input (disable when bookmark dialog is open)
+        if !self.show_bookmark_dialog {
+            ctx.input(|i| {
+                // Zoom controls: +/- keys
+                if i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals) {
+                    self.zoom_view(1.5);
+                }
+                if i.key_pressed(egui::Key::Minus) {
+                    self.zoom_view(1.0 / 1.5);
+                }
 
-            // Pan controls: arrow keys
-            if i.key_pressed(egui::Key::ArrowLeft) {
-                self.pan_view(-1.0, 0.0);
-            }
-            if i.key_pressed(egui::Key::ArrowRight) {
-                self.pan_view(1.0, 0.0);
-            }
-            if i.key_pressed(egui::Key::ArrowUp) {
-                self.pan_view(0.0, 1.0);
-            }
-            if i.key_pressed(egui::Key::ArrowDown) {
-                self.pan_view(0.0, -1.0);
-            }
+                // Pan controls: arrow keys
+                if i.key_pressed(egui::Key::ArrowLeft) {
+                    self.pan_view(-1.0, 0.0);
+                }
+                if i.key_pressed(egui::Key::ArrowRight) {
+                    self.pan_view(1.0, 0.0);
+                }
+                if i.key_pressed(egui::Key::ArrowUp) {
+                    self.pan_view(0.0, 1.0);
+                }
+                if i.key_pressed(egui::Key::ArrowDown) {
+                    self.pan_view(0.0, -1.0);
+                }
 
-            // Reset view: R key
-            if i.key_pressed(egui::Key::R) {
-                self.save_view_to_history();
-                self.reset_view();
-                self.needs_render = true;
-            }
+                // Reset view: R key
+                if i.key_pressed(egui::Key::R) && !i.modifiers.shift {
+                    self.save_view_to_history();
+                    self.reset_view();
+                    self.needs_render = true;
+                }
 
-            // Undo/Redo
-            if i.key_pressed(egui::Key::Z) && i.modifiers.ctrl {
-                self.undo();
-            }
-            if i.key_pressed(egui::Key::Y) && i.modifiers.ctrl {
-                self.redo();
-            }
+                // Undo/Redo
+                if i.key_pressed(egui::Key::Z) && i.modifiers.ctrl {
+                    self.undo();
+                }
+                if i.key_pressed(egui::Key::Y) && i.modifiers.ctrl {
+                    self.redo();
+                }
 
-            // Save: S key
-            if i.key_pressed(egui::Key::S) {
-                match self.save_image(1) {
-                    Ok(path) => {
-                        self.set_status(format!("Saved: {}", path.display()));
-                    }
-                    Err(e) => {
-                        self.set_status(format!("Error: {}", e));
+                // Save: S key
+                if i.key_pressed(egui::Key::S) {
+                    match self.save_image(1) {
+                        Ok(path) => {
+                            self.set_status(format!("Saved: {}", path.display()));
+                        }
+                        Err(e) => {
+                            self.set_status(format!("Error: {}", e));
+                        }
                     }
                 }
-            }
-        });
+            });
+        }
 
         egui::SidePanel::left("controls")
             .default_width(280.0)
@@ -570,12 +778,25 @@ impl eframe::App for FractalApp {
                 }
 
                 ui.separator();
+
+                // View controls
                 ui.horizontal(|ui| {
                     if ui.button("Reset View (R)").clicked() {
                         self.save_view_to_history();
                         self.reset_view();
                         self.needs_render = true;
                     }
+                    if ui
+                        .button("Reset All")
+                        .on_hover_text("Reset view, palette, and parameters")
+                        .clicked()
+                    {
+                        self.save_view_to_history();
+                        self.reset_settings();
+                    }
+                });
+
+                ui.horizontal(|ui| {
                     if ui.button("Save (S)").clicked() {
                         match self.save_image(1) {
                             Ok(path) => {
@@ -585,6 +806,10 @@ impl eframe::App for FractalApp {
                                 self.set_status(format!("Error: {}", e));
                             }
                         }
+                    }
+                    if ui.button("Bookmark").clicked() {
+                        self.show_bookmark_dialog = true;
+                        self.bookmark_name_input.clear();
                     }
                 });
 
@@ -627,10 +852,66 @@ impl eframe::App for FractalApp {
                 });
 
                 ui.separator();
+
+                // Settings toggles
                 let prev_supersampling = self.supersampling_enabled;
                 ui.checkbox(&mut self.supersampling_enabled, "Supersampling (2x)");
                 if self.supersampling_enabled != prev_supersampling {
                     self.needs_render = true;
+                }
+
+                let prev_adaptive = self.adaptive_iterations;
+                ui.checkbox(&mut self.adaptive_iterations, "Adaptive Iterations");
+                if self.adaptive_iterations != prev_adaptive {
+                    self.needs_render = true;
+                }
+                if self.adaptive_iterations {
+                    ui.label(format!(
+                        "Current: {}",
+                        self.calculate_adaptive_iterations(self.get_view().zoom)
+                    ));
+                }
+
+                let prev_minimap = self.minimap_enabled;
+                ui.checkbox(&mut self.minimap_enabled, "Show Minimap");
+                if self.minimap_enabled != prev_minimap {
+                    self.needs_render = true;
+                }
+
+                // Bookmark dialog
+                if self.show_bookmark_dialog {
+                    ui.separator();
+                    ui.label("Bookmark Name:");
+                    ui.text_edit_singleline(&mut self.bookmark_name_input);
+                    ui.horizontal(|ui| {
+                        if ui.button("Save").clicked() && !self.bookmark_name_input.is_empty() {
+                            self.add_bookmark(self.bookmark_name_input.clone());
+                            self.show_bookmark_dialog = false;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.show_bookmark_dialog = false;
+                        }
+                    });
+                }
+
+                // Bookmarks list
+                if !self.bookmarks.is_empty() {
+                    ui.separator();
+                    ui.label("Bookmarks:");
+                    egui::ScrollArea::vertical()
+                        .max_height(150.0)
+                        .show(ui, |ui| {
+                            for (i, bookmark) in self.bookmarks.clone().iter().enumerate() {
+                                ui.horizontal(|ui| {
+                                    if ui.button(&bookmark.name).clicked() {
+                                        self.load_bookmark(i);
+                                    }
+                                    if ui.button("×").clicked() {
+                                        self.delete_bookmark(i);
+                                    }
+                                });
+                            }
+                        });
                 }
 
                 if self.drag_start.is_some() {
@@ -651,7 +932,7 @@ impl eframe::App for FractalApp {
                     view.center_x, view.center_y
                 ));
                 ui.label(format!("Zoom: {:.2e}", view.zoom));
-                ui.label(format!("Iter: {}", self.controls.max_iterations));
+                ui.label(format!("Iter: {}", view.max_iterations));
 
                 // Mouse coordinates display
                 if let Some((fx, fy)) = self.mouse_fractal_pos {
@@ -670,6 +951,7 @@ impl eframe::App for FractalApp {
                 ui.label("+/- : Zoom in/out");
                 ui.label("Arrows : Pan");
                 ui.label("R : Reset view");
+                ui.label("Shift+R : Reset all");
                 ui.label("Ctrl+Z : Undo");
                 ui.label("Ctrl+Y : Redo");
                 ui.label("S : Save image");
@@ -744,14 +1026,29 @@ impl eframe::App for FractalApp {
                         let new_zoom = view.zoom * (height as f64 / sel_height_px as f64);
 
                         self.save_view_to_history();
+
+                        // Calculate adaptive iterations if enabled
+                        let new_max_iter = if self.adaptive_iterations {
+                            self.calculate_adaptive_iterations(new_zoom)
+                        } else {
+                            self.controls.max_iterations
+                        };
+
                         self.set_view(FractalViewState {
                             center_x: new_center_x,
                             center_y: new_center_y,
                             zoom: new_zoom,
-                            max_iterations: self.controls.max_iterations,
+                            max_iterations: new_max_iter,
                             fractal_params: view.fractal_params.clone(),
                             palette_type: self.controls.palette_type,
                         });
+
+                        // Update controls to reflect new iteration count
+                        if self.adaptive_iterations {
+                            self.controls.max_iterations = new_max_iter;
+                            self.controls.pending_max_iterations = new_max_iter;
+                        }
+
                         self.render_delay = 2;
                     }
                 }
@@ -761,16 +1058,19 @@ impl eframe::App for FractalApp {
                 ctx.request_repaint();
             }
 
-            // Initial render check
-            if self.cached_width == 0 || self.cached_height == 0 {
-                self.needs_render = true;
-            } else if self.render_delay > 0 {
-                self.render_delay -= 1;
-                if self.render_delay == 0 {
+            // Initial render check (pause when bookmark dialog is open)
+            if !self.show_bookmark_dialog {
+                if self.cached_width == 0 || self.cached_height == 0 {
                     self.needs_render = true;
+                } else if self.render_delay > 0 {
+                    self.render_delay -= 1;
+                    if self.render_delay == 0 {
+                        self.needs_render = true;
+                    }
                 }
             }
 
+            // Main fractal display
             if let Some(ref image) = self.cached_fractal_image {
                 let texture =
                     ctx.load_texture("fractal", image.clone(), egui::TextureOptions::default());
@@ -782,6 +1082,26 @@ impl eframe::App for FractalApp {
                     )),
                 );
             }
+
+            // Draw minimap if enabled (must be before getting painter)
+            let minimap_rect = if self.minimap_enabled {
+                if let Some(minimap_texture) = self.render_minimap(ctx) {
+                    let minimap_size = 150.0;
+                    let minimap_rect = egui::Rect::from_min_size(
+                        egui::pos2(rect.max.x - minimap_size - 10.0, rect.min.y + 10.0),
+                        egui::vec2(minimap_size, minimap_size),
+                    );
+                    ui.put(
+                        minimap_rect,
+                        egui::Image::new((minimap_texture.id(), minimap_rect.size())),
+                    );
+                    Some(minimap_rect)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
 
             let painter = ui.painter();
 
@@ -816,6 +1136,15 @@ impl eframe::App for FractalApp {
                     let sel_rect = egui::Rect::from_two_pos(start, end);
                     painter.rect_stroke(sel_rect, 1.0, egui::Stroke::new(2.0, egui::Color32::BLUE));
                 }
+            }
+
+            // Draw border around minimap
+            if let Some(minimap_rect) = minimap_rect {
+                painter.rect_stroke(
+                    minimap_rect,
+                    0.0,
+                    egui::Stroke::new(2.0, egui::Color32::WHITE),
+                );
             }
 
             // Incremental rendering
@@ -959,15 +1288,23 @@ impl eframe::App for FractalApp {
                 }
             }
 
-            // Start new render if needed
-            if self.needs_render && !self.is_rendering {
+            // Start new render if needed (but not while bookmark dialog is open)
+            if self.needs_render && !self.is_rendering && !self.show_bookmark_dialog {
                 let display_width = width;
                 let display_height = height;
 
                 self.render_target_width = display_width;
                 self.render_target_height = display_height;
                 self.render_target_view = self.get_view();
-                self.render_target_max_iter = self.controls.max_iterations;
+
+                // Use adaptive iterations if enabled
+                let current_view = self.get_view();
+                self.render_target_max_iter = if self.adaptive_iterations {
+                    self.calculate_adaptive_iterations(current_view.zoom)
+                } else {
+                    self.controls.max_iterations
+                };
+
                 self.render_target_palette_offset = self.controls.palette_offset;
                 self.render_target_palette_type = self.controls.palette_type;
                 self.render_chunk_start = 0;
@@ -1004,6 +1341,8 @@ impl eframe::App for FractalApp {
             default_fractal: self.controls.fractal_type,
             default_palette: self.controls.palette_type,
             supersampling_enabled: self.supersampling_enabled,
+            adaptive_iterations: self.adaptive_iterations,
+            bookmarks: self.bookmarks.clone(),
         };
         if let Err(e) = config.save() {
             eprintln!("Failed to save config: {}", e);
