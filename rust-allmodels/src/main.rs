@@ -24,6 +24,7 @@ struct AppConfig {
     default_iterations: u32,
     default_fractal: FractalType,
     default_palette: PaletteType,
+    supersampling_enabled: bool,
 }
 
 impl Default for AppConfig {
@@ -34,6 +35,7 @@ impl Default for AppConfig {
             default_iterations: 200,
             default_fractal: FractalType::Mandelbrot,
             default_palette: PaletteType::Classic,
+            supersampling_enabled: false,
         }
     }
 }
@@ -173,6 +175,7 @@ struct FractalApp {
     mouse_fractal_pos: Option<(f64, f64)>,
     view_history: ViewHistory,
     last_saved_view: Option<(FractalType, FractalViewState)>,
+    supersampling_enabled: bool,
     // Incremental rendering state
     render_target_width: u32,
     render_target_height: u32,
@@ -182,6 +185,7 @@ struct FractalApp {
     render_target_palette_type: PaletteType,
     render_chunk_start: u32,
     render_pixels: Option<Vec<egui::Color32>>,
+    supersample_pixels: Option<Vec<egui::Color32>>, // 2x resolution when supersampling
 }
 
 struct ZoomPreview {
@@ -242,6 +246,7 @@ impl FractalApp {
             mouse_fractal_pos: None,
             view_history: ViewHistory::new(50),
             last_saved_view: None,
+            supersampling_enabled: config.supersampling_enabled,
             render_target_width: 0,
             render_target_height: 0,
             render_target_view: FractalViewState {
@@ -257,6 +262,7 @@ impl FractalApp {
             render_target_palette_type: config.default_palette,
             render_chunk_start: 0,
             render_pixels: None,
+            supersample_pixels: None,
         };
 
         // Push initial view to history
@@ -620,6 +626,13 @@ impl eframe::App for FractalApp {
                     }
                 });
 
+                ui.separator();
+                let prev_supersampling = self.supersampling_enabled;
+                ui.checkbox(&mut self.supersampling_enabled, "Supersampling (2x)");
+                if self.supersampling_enabled != prev_supersampling {
+                    self.needs_render = true;
+                }
+
                 if self.drag_start.is_some() {
                     ui.separator();
                     ui.label("Release to apply zoom");
@@ -807,24 +820,36 @@ impl eframe::App for FractalApp {
 
             // Incremental rendering
             if self.is_rendering {
-                let width = self.render_target_width;
-                let height = self.render_target_height;
+                let display_width = self.render_target_width;
+                let display_height = self.render_target_height;
 
-                let chunk_size = ((height as f64 / 60.0).ceil() as u32).max(1);
+                // When supersampling, we render at 2x resolution
+                let render_width = if self.supersampling_enabled {
+                    display_width * 2
+                } else {
+                    display_width
+                };
+                let render_height = if self.supersampling_enabled {
+                    display_height * 2
+                } else {
+                    display_height
+                };
+
+                let chunk_size = ((render_height as f64 / 60.0).ceil() as u32).max(1);
                 let y_start = self.render_chunk_start;
-                let y_end = (y_start + chunk_size).min(height);
+                let y_end = (y_start + chunk_size).min(render_height);
 
-                if y_start < height {
+                if y_start < render_height {
                     let chunk_pixels: Vec<egui::Color32> = (y_start..y_end)
                         .into_par_iter()
                         .flat_map(|y| {
-                            (0..width)
+                            (0..render_width)
                                 .map(|x| {
                                     let (px, py) = screen_to_fractal(
                                         x,
                                         y,
-                                        width,
-                                        height,
+                                        render_width,
+                                        render_height,
                                         &self.render_target_view,
                                     );
                                     let iterations =
@@ -845,24 +870,86 @@ impl eframe::App for FractalApp {
                         })
                         .collect();
 
-                    if let Some(ref mut pixels) = self.render_pixels {
-                        let start_idx = y_start as usize * width as usize;
-                        let chunk_len = (y_end - y_start) as usize * width as usize;
+                    if self.supersampling_enabled {
+                        if let Some(ref mut pixels) = self.supersample_pixels {
+                            let start_idx = y_start as usize * render_width as usize;
+                            let chunk_len = (y_end - y_start) as usize * render_width as usize;
+                            pixels[start_idx..start_idx + chunk_len].copy_from_slice(&chunk_pixels);
+                        }
+                    } else if let Some(ref mut pixels) = self.render_pixels {
+                        let start_idx = y_start as usize * render_width as usize;
+                        let chunk_len = (y_end - y_start) as usize * render_width as usize;
                         pixels[start_idx..start_idx + chunk_len].copy_from_slice(&chunk_pixels);
                     }
 
                     self.render_chunk_start = y_end;
-                    self.render_progress = self.render_chunk_start as f32 / height as f32;
+                    self.render_progress = self.render_chunk_start as f32 / render_height as f32;
                     ctx.request_repaint();
                 } else {
-                    if let Some(pixels) = self.render_pixels.take() {
+                    // Rendering complete
+                    let final_pixels = if self.supersampling_enabled {
+                        // Downsample from 2x to 1x using box filter
+                        if let Some(ref supersampled) = self.supersample_pixels.take() {
+                            let mut downsampled = vec![
+                                egui::Color32::BLACK;
+                                (display_width * display_height) as usize
+                            ];
+
+                            for y in 0..display_height {
+                                for x in 0..display_width {
+                                    // Average 2x2 block
+                                    let x0 = (x * 2) as usize;
+                                    let x1 = (x * 2 + 1) as usize;
+                                    let y0 = (y * 2) as usize;
+                                    let y1 = (y * 2 + 1) as usize;
+
+                                    let idx00 = y0 * (render_width as usize) + x0;
+                                    let idx01 = y0 * (render_width as usize) + x1;
+                                    let idx10 = y1 * (render_width as usize) + x0;
+                                    let idx11 = y1 * (render_width as usize) + x1;
+
+                                    let c00 = supersampled[idx00];
+                                    let c01 = supersampled[idx01];
+                                    let c10 = supersampled[idx10];
+                                    let c11 = supersampled[idx11];
+
+                                    let r = ((c00.r() as u16
+                                        + c01.r() as u16
+                                        + c10.r() as u16
+                                        + c11.r() as u16)
+                                        / 4) as u8;
+                                    let g = ((c00.g() as u16
+                                        + c01.g() as u16
+                                        + c10.g() as u16
+                                        + c11.g() as u16)
+                                        / 4) as u8;
+                                    let b = ((c00.b() as u16
+                                        + c01.b() as u16
+                                        + c10.b() as u16
+                                        + c11.b() as u16)
+                                        / 4) as u8;
+
+                                    downsampled[(y * display_width + x) as usize] =
+                                        egui::Color32::from_rgb(r, g, b);
+                                }
+                            }
+                            downsampled
+                        } else {
+                            vec![]
+                        }
+                    } else {
+                        self.render_pixels.take().unwrap_or_default()
+                    };
+
+                    if !final_pixels.is_empty() {
                         self.cached_fractal_image = Some(egui::ColorImage {
-                            size: [width as _, height as _],
-                            pixels,
+                            size: [display_width as _, display_height as _],
+                            pixels: final_pixels,
                         });
                     }
-                    self.cached_width = width;
-                    self.cached_height = height;
+
+                    self.cached_width = display_width;
+                    self.cached_height = display_height;
                     self.needs_render = false;
                     self.is_rendering = false;
                     self.render_progress = 0.0;
@@ -874,14 +961,33 @@ impl eframe::App for FractalApp {
 
             // Start new render if needed
             if self.needs_render && !self.is_rendering {
-                self.render_target_width = width;
-                self.render_target_height = height;
+                let display_width = width;
+                let display_height = height;
+
+                self.render_target_width = display_width;
+                self.render_target_height = display_height;
                 self.render_target_view = self.get_view();
                 self.render_target_max_iter = self.controls.max_iterations;
                 self.render_target_palette_offset = self.controls.palette_offset;
                 self.render_target_palette_type = self.controls.palette_type;
                 self.render_chunk_start = 0;
-                self.render_pixels = Some(vec![egui::Color32::BLACK; (width * height) as usize]);
+
+                if self.supersampling_enabled {
+                    // Allocate buffer for 2x supersampling
+                    self.supersample_pixels = Some(vec![
+                        egui::Color32::BLACK;
+                        (display_width * 2 * display_height * 2)
+                            as usize
+                    ]);
+                    self.render_pixels = None;
+                } else {
+                    self.render_pixels = Some(vec![
+                        egui::Color32::BLACK;
+                        (display_width * display_height) as usize
+                    ]);
+                    self.supersample_pixels = None;
+                }
+
                 self.is_rendering = true;
                 self.render_progress = 0.0;
                 ctx.request_repaint();
@@ -897,6 +1003,7 @@ impl eframe::App for FractalApp {
             default_iterations: self.controls.max_iterations,
             default_fractal: self.controls.fractal_type,
             default_palette: self.controls.palette_type,
+            supersampling_enabled: self.supersampling_enabled,
         };
         if let Err(e) = config.save() {
             eprintln!("Failed to save config: {}", e);
