@@ -1,4 +1,5 @@
 use eframe::egui;
+use rayon::prelude::*;
 use std::collections::HashMap;
 
 mod fractal;
@@ -6,8 +7,8 @@ mod palette;
 mod renderer;
 
 use fractal::{create_fractal, Fractal, FractalType};
-use palette::{get_color, PaletteType};
-use renderer::{screen_to_fractal, CpuRenderer, Renderer};
+use palette::PaletteType;
+use renderer::screen_to_fractal;
 
 #[derive(Clone, Copy, Default)]
 pub struct FractalViewState {
@@ -20,7 +21,6 @@ struct FractalApp {
     fractal: Box<dyn Fractal>,
     controls: FractalControls,
     views: HashMap<FractalType, FractalViewState>,
-    renderer: CpuRenderer,
     drag_start: Option<egui::Pos2>,
     drag_current: Option<egui::Pos2>,
     needs_render: bool,
@@ -30,6 +30,17 @@ struct FractalApp {
     prev_fractal_image: Option<egui::ColorImage>,
     render_delay: u32,
     zoom_preview: Option<ZoomPreview>,
+    render_progress: f32,
+    is_rendering: bool,
+    // Incremental rendering state
+    render_target_width: u32,
+    render_target_height: u32,
+    render_target_view: FractalViewState,
+    render_target_max_iter: u32,
+    render_target_palette_offset: f32,
+    render_target_palette_type: PaletteType,
+    render_chunk_start: usize,
+    render_pixels: Option<Vec<egui::Color32>>,
 }
 
 struct ZoomPreview {
@@ -85,7 +96,6 @@ impl Default for FractalApp {
             fractal: create_fractal(FractalType::Mandelbrot),
             controls: FractalControls::default(),
             views,
-            renderer: CpuRenderer::new(),
             drag_start: None,
             drag_current: None,
             needs_render: true,
@@ -95,6 +105,20 @@ impl Default for FractalApp {
             prev_fractal_image: None,
             render_delay: 0,
             zoom_preview: None,
+            render_progress: 0.0,
+            is_rendering: false,
+            render_target_width: 0,
+            render_target_height: 0,
+            render_target_view: FractalViewState {
+                center_x: 0.0,
+                center_y: 0.0,
+                zoom: 1.0,
+            },
+            render_target_max_iter: 200,
+            render_target_palette_offset: 0.0,
+            render_target_palette_type: PaletteType::Classic,
+            render_chunk_start: 0,
+            render_pixels: None,
         }
     }
 }
@@ -165,6 +189,12 @@ impl eframe::App for FractalApp {
                 ));
                 ui.label(format!("Zoom: {:.2e}", view.zoom));
                 ui.label(format!("Iter: {}", self.controls.max_iterations));
+
+                if self.is_rendering || self.needs_render {
+                    ui.separator();
+                    ui.label("Rendering...");
+                    ui.add(egui::ProgressBar::new(self.render_progress).desired_width(200.0));
+                }
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -303,69 +333,97 @@ impl eframe::App for FractalApp {
                 }
             }
 
-            // Render after drawing (so preview shows first)
-            if self.needs_render {
-                let start_time = std::time::Instant::now();
+            // Incremental rendering - one chunk per frame
+            if self.is_rendering {
+                let width = self.render_target_width;
+                let height = self.render_target_height;
 
-                let view = self.get_view();
-                let max_iter = self.controls.max_iterations;
-                let palette_offset = self.controls.palette_offset;
+                // Process one chunk
+                let chunk_size = ((height as f64 / 60.0).ceil() as u32).max(1);
+                let y_start = self.render_chunk_start;
+                let y_end = (y_start + chunk_size as usize).min(height as usize);
 
-                let pixels = self.renderer.render(
-                    self.fractal.as_ref(),
-                    &DummyPalette {
-                        palette_type: self.controls.palette_type,
-                    },
-                    width,
-                    height,
-                    view,
-                    max_iter,
-                    palette_offset,
-                );
+                if y_start < height as usize {
+                    // Render this chunk
+                    let chunk_pixels: Vec<egui::Color32> = (y_start as u32..y_end as u32)
+                        .into_par_iter()
+                        .flat_map(|y| {
+                            (0..width)
+                                .map(|x| {
+                                    use renderer::screen_to_fractal;
+                                    let (px, py) = screen_to_fractal(
+                                        x,
+                                        y,
+                                        width,
+                                        height,
+                                        self.render_target_view,
+                                    );
+                                    let iterations =
+                                        self.fractal.compute(px, py, self.render_target_max_iter);
+                                    if iterations >= self.render_target_max_iter {
+                                        egui::Color32::BLACK
+                                    } else {
+                                        let t =
+                                            iterations as f32 / self.render_target_max_iter as f32;
+                                        let adjusted_t =
+                                            (t + self.render_target_palette_offset) % 1.0;
+                                        palette::get_color(
+                                            self.render_target_palette_type,
+                                            adjusted_t,
+                                            0.0,
+                                        )
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .collect();
 
-                let render_time = start_time.elapsed();
-                let pixels_total = width * height * max_iter;
+                    // Copy to pixel buffer
+                    if let Some(ref mut pixels) = self.render_pixels {
+                        for (i, color) in chunk_pixels.iter().enumerate() {
+                            let y = y_start + i / width as usize;
+                            let x = i % width as usize;
+                            pixels[y * width as usize + x] = *color;
+                        }
+                    }
 
-                println!(
-                    "RENDER: {:?} | {:?} | {}x{}x{}={} | center=({:.6},{:.6}) zoom={:.2e} | {:?}",
-                    self.controls.fractal_type,
-                    self.controls.palette_type,
-                    width,
-                    height,
-                    max_iter,
-                    pixels_total,
-                    view.center_x,
-                    view.center_y,
-                    view.zoom,
-                    render_time
-                );
+                    self.render_chunk_start = y_end;
+                    self.render_progress = self.render_chunk_start as f32 / height as f32;
+                    ctx.request_repaint();
+                } else {
+                    // Render complete
+                    if let Some(pixels) = self.render_pixels.take() {
+                        self.cached_fractal_image = Some(egui::ColorImage {
+                            size: [width as _, height as _],
+                            pixels,
+                        });
+                    }
+                    self.cached_width = width;
+                    self.cached_height = height;
+                    self.needs_render = false;
+                    self.is_rendering = false;
+                    self.render_progress = 0.0;
+                    self.zoom_preview = None;
+                    ctx.request_repaint();
+                }
+            }
 
-                self.cached_fractal_image = Some(egui::ColorImage {
-                    size: [width as _, height as _],
-                    pixels,
-                });
-                self.cached_width = width;
-                self.cached_height = height;
-                self.needs_render = false;
-                self.zoom_preview = None;
-                self.prev_fractal_image = None;
+            // Start new render if needed
+            if self.needs_render && !self.is_rendering {
+                // Initialize incremental render state
+                self.render_target_width = width;
+                self.render_target_height = height;
+                self.render_target_view = self.get_view();
+                self.render_target_max_iter = self.controls.max_iterations;
+                self.render_target_palette_offset = self.controls.palette_offset;
+                self.render_target_palette_type = self.controls.palette_type;
+                self.render_chunk_start = 0;
+                self.render_pixels = Some(vec![egui::Color32::BLACK; (width * height) as usize]);
+                self.is_rendering = true;
+                self.render_progress = 0.0;
                 ctx.request_repaint();
             }
         });
-    }
-}
-
-struct DummyPalette {
-    palette_type: PaletteType,
-}
-
-impl palette::Palette for DummyPalette {
-    fn name(&self) -> &str {
-        ""
-    }
-
-    fn color(&self, t: f32) -> egui::Color32 {
-        get_color(self.palette_type, t, 0.0)
     }
 }
 
@@ -463,7 +521,6 @@ impl FractalControls {
         ui.separator();
         ui.label("Controls:");
         ui.label("- Click + Drag: Select zoom region");
-        ui.label("- Click: Drag to pan view");
     }
 }
 
