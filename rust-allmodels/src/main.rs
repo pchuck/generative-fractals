@@ -58,39 +58,24 @@ struct ZoomPreview {
 impl Default for FractalApp {
     fn default() -> Self {
         let mut views = HashMap::new();
-        views.insert(
+        for ft in [
             FractalType::Mandelbrot,
-            FractalViewState {
-                center_x: -0.5,
-                center_y: 0.0,
-                zoom: 1.0,
-                max_iterations: 200,
-                fractal_params: HashMap::new(),
-                palette_type: PaletteType::Classic,
-            },
-        );
-        views.insert(
             FractalType::Julia,
-            FractalViewState {
-                center_x: 0.0,
-                center_y: 0.0,
-                zoom: 1.0,
-                max_iterations: 200,
-                fractal_params: HashMap::new(),
-                palette_type: PaletteType::Classic,
-            },
-        );
-        views.insert(
             FractalType::BurningShip,
-            FractalViewState {
-                center_x: -0.5,
-                center_y: -0.5,
-                zoom: 1.0,
-                max_iterations: 200,
-                fractal_params: HashMap::new(),
-                palette_type: PaletteType::Classic,
-            },
-        );
+        ] {
+            let (cx, cy) = ft.default_center();
+            views.insert(
+                ft,
+                FractalViewState {
+                    center_x: cx,
+                    center_y: cy,
+                    zoom: 1.0,
+                    max_iterations: 200,
+                    fractal_params: HashMap::new(),
+                    palette_type: PaletteType::Classic,
+                },
+            );
+        }
 
         FractalApp {
             fractal: create_fractal(FractalType::Mandelbrot),
@@ -155,11 +140,10 @@ impl FractalApp {
         let width = image.width() as u32;
         let height = image.height() as u32;
         let mut img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::new(width, height);
-        for y in 0..height {
-            for x in 0..width {
-                let color = image[(x as usize, y as usize)];
-                img.put_pixel(x, y, Rgb([color.r(), color.g(), color.b()]));
-            }
+        for (i, color) in image.pixels.iter().enumerate() {
+            let x = (i % width as usize) as u32;
+            let y = (i / width as usize) as u32;
+            img.put_pixel(x, y, Rgb([color.r(), color.g(), color.b()]));
         }
         let filename = format!(
             "images/{}_{}_{}x{}.png",
@@ -172,6 +156,7 @@ impl FractalApp {
     }
 
     fn reset_view(&mut self) {
+        let (center_x, center_y) = self.controls.fractal_type.default_center();
         let current_max_iter = self.controls.max_iterations;
         let current_palette = self.controls.palette_type;
         let current_params = self
@@ -179,31 +164,13 @@ impl FractalApp {
             .get(&self.controls.fractal_type)
             .map(|v| v.fractal_params.clone())
             .unwrap_or_default();
-        let default_view = match self.controls.fractal_type {
-            FractalType::Mandelbrot => FractalViewState {
-                center_x: -0.5,
-                center_y: 0.0,
-                zoom: 1.0,
-                max_iterations: current_max_iter,
-                fractal_params: current_params,
-                palette_type: current_palette,
-            },
-            FractalType::Julia => FractalViewState {
-                center_x: 0.0,
-                center_y: 0.0,
-                zoom: 1.0,
-                max_iterations: current_max_iter,
-                fractal_params: current_params,
-                palette_type: current_palette,
-            },
-            FractalType::BurningShip => FractalViewState {
-                center_x: -0.5,
-                center_y: -0.5,
-                zoom: 1.0,
-                max_iterations: current_max_iter,
-                fractal_params: current_params,
-                palette_type: current_palette,
-            },
+        let default_view = FractalViewState {
+            center_x,
+            center_y,
+            zoom: 1.0,
+            max_iterations: current_max_iter,
+            fractal_params: current_params,
+            palette_type: current_palette,
         };
         self.views.insert(self.controls.fractal_type, default_view);
     }

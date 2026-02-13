@@ -6,6 +6,16 @@ pub enum FractalType {
     BurningShip,
 }
 
+impl FractalType {
+    pub fn default_center(&self) -> (f64, f64) {
+        match self {
+            FractalType::Mandelbrot => (-0.5, 0.0),
+            FractalType::Julia => (0.0, 0.0),
+            FractalType::BurningShip => (-0.5, -0.5),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Parameter {
     pub name: String,
