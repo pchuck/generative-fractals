@@ -7,7 +7,7 @@ mod renderer;
 
 use fractal::{create_fractal, Fractal, FractalType};
 use palette::{get_color, PaletteType};
-use renderer::{CpuRenderer, Renderer};
+use renderer::{screen_to_fractal, CpuRenderer, Renderer};
 
 #[derive(Clone, Copy, Default)]
 pub struct FractalViewState {
@@ -23,7 +23,6 @@ struct FractalApp {
     renderer: CpuRenderer,
     drag_start: Option<egui::Pos2>,
     drag_current: Option<egui::Pos2>,
-    canvas_rect: egui::Rect,
     needs_render: bool,
     cached_fractal_image: Option<egui::ColorImage>,
     cached_width: u32,
@@ -89,7 +88,6 @@ impl Default for FractalApp {
             renderer: CpuRenderer::new(),
             drag_start: None,
             drag_current: None,
-            canvas_rect: egui::Rect::NOTHING,
             needs_render: true,
             cached_fractal_image: None,
             cached_width: 0,
@@ -174,8 +172,6 @@ impl eframe::App for FractalApp {
             let width = rect.width() as u32;
             let height = rect.height() as u32;
 
-            self.canvas_rect = rect;
-
             if width == 0 || height == 0 {
                 return;
             }
@@ -219,15 +215,21 @@ impl eframe::App for FractalApp {
                             sel_max: egui::pos2(max_x, max_y),
                         });
 
+                        // Use the mapping functions for zoom calculation
                         let view = self.get_view();
+
+                        // Get fractal coordinates of selection corners
+                        let (fractal_min_x, fractal_max_y) =
+                            screen_to_fractal(min_x as u32, max_y as u32, width, height, view);
+                        let (fractal_max_x, fractal_min_y) =
+                            screen_to_fractal(max_x as u32, min_y as u32, width, height, view);
+
+                        // Center of selection in fractal coordinates
+                        let new_center_x = (fractal_min_x + fractal_max_x) / 2.0;
+                        let new_center_y = (fractal_min_y + fractal_max_y) / 2.0;
+
+                        // Zoom = old_zoom * (old_height / new_height)
                         let sel_height_px = max_y - min_y;
-                        let sel_center_x = ((min_x + max_x) / 2.0) as f64;
-                        let sel_center_y = ((min_y + max_y) / 2.0) as f64;
-                        let scale = 4.0 / (view.zoom * height as f64);
-                        let new_center_x =
-                            view.center_x + (sel_center_x - width as f64 / 2.0) * scale;
-                        let new_center_y =
-                            view.center_y - (sel_center_y - height as f64 / 2.0) * scale;
                         let new_zoom = view.zoom * (height as f64 / sel_height_px as f64);
 
                         self.set_view(FractalViewState {

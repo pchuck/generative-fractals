@@ -3,6 +3,21 @@ use crate::palette::Palette;
 use crate::FractalViewState;
 use eframe::egui::Color32;
 
+pub fn screen_to_fractal(
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    view: FractalViewState,
+) -> (f64, f64) {
+    let aspect = width as f64 / height as f64;
+    let uv_x = x as f64 / width as f64;
+    let uv_y = y as f64 / height as f64;
+    let px = view.center_x + (uv_x - 0.5) * 4.0 * aspect / view.zoom;
+    let py = view.center_y - (uv_y - 0.5) * 4.0 / view.zoom;
+    (px, py)
+}
+
 #[allow(dead_code)]
 pub trait Renderer: Send + Sync {
     fn name(&self) -> &str;
@@ -52,11 +67,7 @@ impl Renderer for CpuRenderer {
 
         for y in 0..height {
             for x in 0..width {
-                let uv_x = x as f64 / width as f64;
-                let uv_y = y as f64 / height as f64;
-
-                let px = view.center_x + (uv_x - 0.5) * 4.0 / view.zoom;
-                let py = view.center_y - (uv_y - 0.5) * 4.0 / view.zoom;
+                let (px, py) = screen_to_fractal(x, y, width, height, view);
 
                 let iterations = fractal.compute(px, py, max_iter);
 
