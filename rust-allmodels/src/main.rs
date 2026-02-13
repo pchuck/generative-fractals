@@ -62,6 +62,10 @@ impl Default for FractalApp {
             FractalType::Mandelbrot,
             FractalType::Julia,
             FractalType::BurningShip,
+            FractalType::Tricorn,
+            FractalType::Celtic,
+            FractalType::Newton,
+            FractalType::Biomorph,
         ] {
             let (cx, cy) = ft.default_center();
             views.insert(
@@ -129,6 +133,10 @@ impl FractalApp {
             FractalType::Mandelbrot => "mandelbrot",
             FractalType::Julia => "julia",
             FractalType::BurningShip => "burning_ship",
+            FractalType::Tricorn => "tricorn",
+            FractalType::Celtic => "celtic",
+            FractalType::Newton => "newton",
+            FractalType::Biomorph => "biomorph",
         };
         let palette_name = match self.controls.palette_type {
             PaletteType::Classic => "classic",
