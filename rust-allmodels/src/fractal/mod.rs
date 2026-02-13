@@ -11,6 +11,8 @@ pub enum FractalType {
 }
 
 impl FractalType {
+    /// Returns the default view center for this fractal type.
+    /// Used to position the camera when first viewing the fractal.
     pub fn default_center(&self) -> (f64, f64) {
         match self {
             FractalType::Mandelbrot => (-0.5, 0.0),
@@ -32,16 +34,90 @@ pub struct Parameter {
     pub max: f64,
 }
 
+/// Trait for fractal implementations.
+///
+/// Each fractal provides:
+/// - A name for display purposes
+/// - Configurable parameters with min/max bounds
+/// - A computation function that returns iteration count
 pub trait Fractal: Send + Sync {
+    /// Returns the display name of this fractal.
     #[allow(dead_code)]
     fn name(&self) -> &str;
+
+    /// Returns the list of configurable parameters for this fractal.
     fn parameters(&self) -> Vec<Parameter>;
+
+    /// Sets a parameter value, clamping to valid range.
     fn set_parameter(&mut self, name: &str, value: f64);
+
+    /// Gets the current value of a parameter, or None if not found.
     #[allow(dead_code)]
     fn get_parameter(&self, name: &str) -> Option<f64>;
+
+    /// Computes the iteration count for a point in the fractal.
+    ///
+    /// Returns a value from 0 to max_iter:
+    /// - max_iter: Point is inside the set (did not escape)
+    /// - lower values: Point escaped after that many iterations
     fn compute(&self, cx: f64, cy: f64, max_iter: u32) -> u32;
 }
 
+/// Macro to generate Fractal implementations for simple power-based fractals.
+///
+/// Generates:
+/// - name() method
+/// - parameters() returning a single "power" parameter
+/// - set_parameter() and get_parameter() implementations
+///
+/// Usage: impl_power_fractal!(StructName, "Display Name")
+macro_rules! impl_power_fractal {
+    ($struct_name:ident, $display_name:expr) => {
+        impl Fractal for $struct_name {
+            fn name(&self) -> &str {
+                $display_name
+            }
+
+            fn parameters(&self) -> Vec<Parameter> {
+                vec![Parameter {
+                    name: "power".to_string(),
+                    value: self.power,
+                    min: 1.0,
+                    max: 8.0,
+                }]
+            }
+
+            fn set_parameter(&mut self, name: &str, value: f64) {
+                if name == "power" {
+                    self.power = value.clamp(1.0, 8.0);
+                }
+            }
+
+            fn get_parameter(&self, name: &str) -> Option<f64> {
+                match name {
+                    "power" => Some(self.power),
+                    _ => None,
+                }
+            }
+
+            fn compute(&self, cx: f64, cy: f64, max_iter: u32) -> u32 {
+                self.compute_point(cx, cy, max_iter)
+            }
+        }
+    };
+}
+
+// ============================================================================
+// Mandelbrot Set
+// ============================================================================
+
+/// The classic Mandelbrot set.
+///
+/// Defined by the iteration: z_{n+1} = z_n^power + c
+/// where c is the complex coordinate (cx, cy).
+///
+/// The set consists of all points where the iteration does not diverge
+/// (remain bounded) as n -> infinity.
 pub struct Mandelbrot {
     pub power: f64,
 }
@@ -52,34 +128,10 @@ impl Default for Mandelbrot {
     }
 }
 
-impl Fractal for Mandelbrot {
-    fn name(&self) -> &str {
-        "Mandelbrot"
-    }
-
-    fn parameters(&self) -> Vec<Parameter> {
-        vec![Parameter {
-            name: "power".to_string(),
-            value: self.power,
-            min: 1.0,
-            max: 8.0,
-        }]
-    }
-
-    fn set_parameter(&mut self, name: &str, value: f64) {
-        if name == "power" {
-            self.power = value.clamp(1.0, 8.0);
-        }
-    }
-
-    fn get_parameter(&self, name: &str) -> Option<f64> {
-        match name {
-            "power" => Some(self.power),
-            _ => None,
-        }
-    }
-
-    fn compute(&self, cx: f64, cy: f64, max_iter: u32) -> u32 {
+impl Mandelbrot {
+    /// Computes iterations for a single point using De Moivre's theorem
+    /// for arbitrary power exponentiation.
+    fn compute_point(&self, cx: f64, cy: f64, max_iter: u32) -> u32 {
         let mut z_re: f64 = 0.0;
         let mut z_im: f64 = 0.0;
         let c_re = cx;
@@ -94,6 +146,7 @@ impl Fractal for Mandelbrot {
                 return i;
             }
 
+            // Use De Moivre's theorem: (r*e^(iθ))^power = r^power * e^(i*power*θ)
             let angle = 2.0 * z_im.atan2(z_re);
             let radius = (r2 + i2).powf(power / 2.0);
 
@@ -105,6 +158,21 @@ impl Fractal for Mandelbrot {
     }
 }
 
+impl_power_fractal!(Mandelbrot, "Mandelbrot");
+
+// ============================================================================
+// Julia Set
+// ============================================================================
+
+/// Julia sets for the function f(z) = z^power + c.
+///
+/// Unlike Mandelbrot where c varies per pixel, Julia uses a fixed c value
+/// and varies the initial z (which corresponds to the pixel coordinate).
+///
+/// Each c value produces a different Julia set. Famous examples:
+/// - c = -0.7 + 0.27015i (default): Douady rabbit
+/// - c = -0.123 + 0.745i: Douady rabbit variant
+/// - c = -0.391 - 0.587i: San Marco fractal
 pub struct Julia {
     pub c_real: f64,
     pub c_imag: f64,
@@ -193,6 +261,16 @@ impl Fractal for Julia {
     }
 }
 
+// ============================================================================
+// Burning Ship
+// ============================================================================
+
+/// The Burning Ship fractal.
+///
+/// Similar to Mandelbrot but with absolute values:
+/// z_{n+1} = (|Re(z_n)| + i*|Im(z_n)|)^power + c
+///
+/// Creates a distinctive "burning ship" appearance in the negative quadrant.
 pub struct BurningShip {
     pub power: f64,
 }
@@ -203,34 +281,8 @@ impl Default for BurningShip {
     }
 }
 
-impl Fractal for BurningShip {
-    fn name(&self) -> &str {
-        "Burning Ship"
-    }
-
-    fn parameters(&self) -> Vec<Parameter> {
-        vec![Parameter {
-            name: "power".to_string(),
-            value: self.power,
-            min: 1.0,
-            max: 8.0,
-        }]
-    }
-
-    fn set_parameter(&mut self, name: &str, value: f64) {
-        if name == "power" {
-            self.power = value.clamp(1.0, 8.0);
-        }
-    }
-
-    fn get_parameter(&self, name: &str) -> Option<f64> {
-        match name {
-            "power" => Some(self.power),
-            _ => None,
-        }
-    }
-
-    fn compute(&self, cx: f64, cy: f64, max_iter: u32) -> u32 {
+impl BurningShip {
+    fn compute_point(&self, cx: f64, cy: f64, max_iter: u32) -> u32 {
         let mut z_re: f64 = 0.0;
         let mut z_im: f64 = 0.0;
         let c_re = cx;
@@ -259,6 +311,18 @@ impl Fractal for BurningShip {
     }
 }
 
+impl_power_fractal!(BurningShip, "Burning Ship");
+
+// ============================================================================
+// Tricorn (Mandelbar)
+// ============================================================================
+
+/// The Tricorn fractal (also known as Mandelbar).
+///
+/// Uses complex conjugation in the iteration:
+/// z_{n+1} = conj(z_n)^power + c
+///
+/// The conjugation creates the characteristic three-pointed shape.
 pub struct Tricorn {
     pub power: f64,
 }
@@ -269,34 +333,8 @@ impl Default for Tricorn {
     }
 }
 
-impl Fractal for Tricorn {
-    fn name(&self) -> &str {
-        "Tricorn"
-    }
-
-    fn parameters(&self) -> Vec<Parameter> {
-        vec![Parameter {
-            name: "power".to_string(),
-            value: self.power,
-            min: 1.0,
-            max: 8.0,
-        }]
-    }
-
-    fn set_parameter(&mut self, name: &str, value: f64) {
-        if name == "power" {
-            self.power = value.clamp(1.0, 8.0);
-        }
-    }
-
-    fn get_parameter(&self, name: &str) -> Option<f64> {
-        match name {
-            "power" => Some(self.power),
-            _ => None,
-        }
-    }
-
-    fn compute(&self, cx: f64, cy: f64, max_iter: u32) -> u32 {
+impl Tricorn {
+    fn compute_point(&self, cx: f64, cy: f64, max_iter: u32) -> u32 {
         let mut z_re: f64 = 0.0;
         let mut z_im: f64 = 0.0;
         let c_re = cx;
@@ -311,6 +349,7 @@ impl Fractal for Tricorn {
                 return i;
             }
 
+            // Conjugation: flip the sign of the imaginary component
             let angle = -2.0 * z_im.atan2(z_re);
             let radius = (r2 + i2).powf(power / 2.0);
 
@@ -322,6 +361,18 @@ impl Fractal for Tricorn {
     }
 }
 
+impl_power_fractal!(Tricorn, "Tricorn");
+
+// ============================================================================
+// Celtic
+// ============================================================================
+
+/// The Celtic fractal.
+///
+/// A hybrid combining elements of Burning Ship and standard fractals:
+/// Only the real part takes absolute value after squaring.
+///
+/// Creates intricate Celtic knot-like patterns.
 pub struct Celtic {
     pub power: f64,
 }
@@ -332,34 +383,8 @@ impl Default for Celtic {
     }
 }
 
-impl Fractal for Celtic {
-    fn name(&self) -> &str {
-        "Celtic"
-    }
-
-    fn parameters(&self) -> Vec<Parameter> {
-        vec![Parameter {
-            name: "power".to_string(),
-            value: self.power,
-            min: 1.0,
-            max: 8.0,
-        }]
-    }
-
-    fn set_parameter(&mut self, name: &str, value: f64) {
-        if name == "power" {
-            self.power = value.clamp(1.0, 8.0);
-        }
-    }
-
-    fn get_parameter(&self, name: &str) -> Option<f64> {
-        match name {
-            "power" => Some(self.power),
-            _ => None,
-        }
-    }
-
-    fn compute(&self, cx: f64, cy: f64, max_iter: u32) -> u32 {
+impl Celtic {
+    fn compute_point(&self, cx: f64, cy: f64, max_iter: u32) -> u32 {
         let mut z_re: f64 = 0.0;
         let mut z_im: f64 = 0.0;
         let c_re = cx;
@@ -385,6 +410,24 @@ impl Fractal for Celtic {
     }
 }
 
+impl_power_fractal!(Celtic, "Celtic");
+
+// ============================================================================
+// Newton's Method Fractal
+// ============================================================================
+
+/// Newton's method fractal for z^3 - 1 = 0.
+///
+/// Uses Newton's root-finding method to visualize which root each point
+/// converges to when applying Newton's method to f(z) = z^3 - 1.
+///
+/// The roots are:
+/// - root1: z = 1 (angle 0)
+/// - root2: z = e^(2πi/3) = -0.5 + 0.866i
+/// - root3: z = e^(4πi/3) = -0.5 - 0.866i
+///
+/// Newton's iteration: z_{n+1} = z_n - f(z_n)/f'(z_n)
+/// For f(z) = z^3 - 1: z_{n+1} = (2*z^3 + 1) / (3*z^2)
 pub struct Newton {
     pub escape_radius: f64,
     pub tolerance: f64,
@@ -443,42 +486,47 @@ impl Fractal for Newton {
         let tolerance = self.tolerance;
         let tolerance2 = tolerance * tolerance;
 
+        // Pre-computed roots of z^3 - 1 = 0 (cube roots of unity)
         let root1_re = 1.0;
         let root1_im = 0.0;
         let root2_re = -0.5;
-        let root2_im = 0.8660254037844386;
+        let root2_im = 0.8660254037844386; // sqrt(3)/2
         let root3_re = -0.5;
-        let root3_im = -0.8660254037844386;
+        let root3_im = -0.8660254037844386; // -sqrt(3)/2
 
         for i in 0..max_iter {
+            // Check convergence to any root using squared distance (faster)
             let dist2_1 = (z_re - root1_re).powi(2) + (z_im - root1_im).powi(2);
             let dist2_2 = (z_re - root2_re).powi(2) + (z_im - root2_im).powi(2);
             let dist2_3 = (z_re - root3_re).powi(2) + (z_im - root3_im).powi(2);
 
-            if dist2_1 < tolerance2 {
-                return i;
-            }
-            if dist2_2 < tolerance2 {
-                return i;
-            }
-            if dist2_3 < tolerance2 {
-                return i;
+            if dist2_1 < tolerance2 || dist2_2 < tolerance2 || dist2_3 < tolerance2 {
+                return max_iter - i; // Converged - return high iteration count
             }
 
+            // Compute z^2 and z^3 for Newton's method
+            // z^2 = (a + bi)^2 = (a^2 - b^2) + 2abi
             let z_re2 = z_re * z_re;
             let z_im2 = z_im * z_im;
+
+            // z^3 = z^2 * z = (a^2 - b^2)a - 2ab*b + i[(a^2 - b^2)b + 2ab*a]
+            //     = a(a^2 - 3b^2) + i*b(3a^2 - b^2)
             let z_re3 = z_re2 * z_re - 3.0 * z_re * z_im2;
             let z_im3 = 3.0 * z_re2 * z_im - z_im2 * z_im;
 
+            // f(z) = z^3 - 1
             let f_real = z_re3 - 1.0;
             let f_imag = z_im3;
 
+            // f'(z) = 3*z^2
             let deriv_real = 3.0 * (z_re2 - z_im2);
             let deriv_imag = 6.0 * z_re * z_im;
 
+            // Newton's step: z = z - f(z)/f'(z)
+            // Division: (a+bi)/(c+di) = [(ac+bd) + i(bc-ad)] / (c^2+d^2)
             let denom = deriv_real * deriv_real + deriv_imag * deriv_imag;
             if denom.abs() < 1e-20 {
-                break;
+                break; // Singularity - avoid division by zero
             }
 
             let new_re = z_re - (f_real * deriv_real + f_imag * deriv_imag) / denom;
@@ -488,10 +536,21 @@ impl Fractal for Newton {
             z_im = new_im;
         }
 
-        max_iter
+        max_iter // Did not converge to a root
     }
 }
 
+// ============================================================================
+// Biomorph
+// ============================================================================
+
+/// Biomorph fractal - combines Newton's method with escape conditions.
+///
+/// Similar to Newton's method but stops if the iteration either:
+/// 1. Converges to one of the roots (like Newton)
+/// 2. Escapes beyond the escape radius (like Mandelbrot)
+///
+/// Creates organic, biological-looking structures hence the name "biomorph".
 pub struct Biomorph {
     pub escape_radius: f64,
     pub tolerance: f64,
@@ -551,6 +610,7 @@ impl Fractal for Biomorph {
         let tolerance2 = tolerance * tolerance;
         let escape_r2 = self.escape_radius * self.escape_radius;
 
+        // Roots of z^3 - 1 = 0 (same as Newton)
         let root1_re = 1.0;
         let root1_im = 0.0;
         let root2_re = -0.5;
@@ -559,25 +619,22 @@ impl Fractal for Biomorph {
         let root3_im = -0.8660254037844386;
 
         for i in 0..max_iter {
+            // Check convergence to any root
             let dist2_1 = (z_re - root1_re).powi(2) + (z_im - root1_im).powi(2);
             let dist2_2 = (z_re - root2_re).powi(2) + (z_im - root2_im).powi(2);
             let dist2_3 = (z_re - root3_re).powi(2) + (z_im - root3_im).powi(2);
 
-            if dist2_1 < tolerance2 {
-                return max_iter - i;
-            }
-            if dist2_2 < tolerance2 {
-                return max_iter - i;
-            }
-            if dist2_3 < tolerance2 {
-                return max_iter - i;
+            if dist2_1 < tolerance2 || dist2_2 < tolerance2 || dist2_3 < tolerance2 {
+                return max_iter - i; // Converged - bright color
             }
 
+            // Check escape (unlike pure Newton)
             let r2 = z_re * z_re + z_im * z_im;
             if r2 > escape_r2 {
-                return i;
+                return i; // Escaped - return iteration count for coloring
             }
 
+            // Newton's method iteration (same as Newton fractal)
             let z_re2 = z_re * z_re;
             let z_im2 = z_im * z_im;
             let z_re3 = z_re2 * z_re - 3.0 * z_re * z_im2;
@@ -601,10 +658,11 @@ impl Fractal for Biomorph {
             z_im = new_im;
         }
 
-        0
+        max_iter // Neither converged nor escaped
     }
 }
 
+/// Factory function to create fractal instances.
 pub fn create_fractal(fractal_type: FractalType) -> Box<dyn Fractal> {
     match fractal_type {
         FractalType::Mandelbrot => Box::new(Mandelbrot::default()),

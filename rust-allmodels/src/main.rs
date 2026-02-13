@@ -3,6 +3,7 @@ use image::{ImageBuffer, Rgb};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Instant;
 
 mod fractal;
 mod palette;
@@ -39,6 +40,7 @@ struct FractalApp {
     zoom_preview: Option<ZoomPreview>,
     render_progress: f32,
     is_rendering: bool,
+    status_message: Option<(String, Instant)>, // (message, timestamp)
     // Incremental rendering state
     render_target_width: u32,
     render_target_height: u32,
@@ -46,7 +48,7 @@ struct FractalApp {
     render_target_max_iter: u32,
     render_target_palette_offset: f32,
     render_target_palette_type: PaletteType,
-    render_chunk_start: usize,
+    render_chunk_start: u32,
     render_pixels: Option<Vec<egui::Color32>>,
 }
 
@@ -96,6 +98,7 @@ impl Default for FractalApp {
             zoom_preview: None,
             render_progress: 0.0,
             is_rendering: false,
+            status_message: None,
             render_target_width: 0,
             render_target_height: 0,
             render_target_view: FractalViewState {
@@ -127,8 +130,12 @@ impl FractalApp {
         self.views.insert(self.controls.fractal_type, view);
     }
 
-    fn save_image(&self) -> Option<PathBuf> {
-        let image = self.cached_fractal_image.as_ref()?;
+    fn save_image(&self) -> Result<PathBuf, String> {
+        let image = self
+            .cached_fractal_image
+            .as_ref()
+            .ok_or("No image to save - wait for render to complete")?;
+
         let fractal_name = match self.controls.fractal_type {
             FractalType::Mandelbrot => "mandelbrot",
             FractalType::Julia => "julia",
@@ -157,10 +164,12 @@ impl FractalApp {
             "images/{}_{}_{}x{}.png",
             fractal_name, palette_name, width, height
         );
-        std::fs::create_dir_all("images").ok()?;
+        std::fs::create_dir_all("images")
+            .map_err(|e| format!("Failed to create images directory: {}", e))?;
         let path = PathBuf::from(&filename);
-        img.save(&path).ok()?;
-        Some(path)
+        img.save(&path)
+            .map_err(|e| format!("Failed to save image: {}", e))?;
+        Ok(path)
     }
 
     fn reset_view(&mut self) {
@@ -182,10 +191,84 @@ impl FractalApp {
         };
         self.views.insert(self.controls.fractal_type, default_view);
     }
+
+    fn zoom_view(&mut self, factor: f64) {
+        let mut view = self.get_view();
+        view.zoom *= factor;
+        self.set_view(view);
+        self.needs_render = true;
+    }
+
+    fn pan_view(&mut self, dx: f64, dy: f64) {
+        let mut view = self.get_view();
+        // Pan amount depends on current zoom level
+        let pan_amount = 0.5 / view.zoom;
+        view.center_x += dx * pan_amount;
+        view.center_y += dy * pan_amount;
+        self.set_view(view);
+        self.needs_render = true;
+    }
+
+    fn set_status(&mut self, message: String) {
+        self.status_message = Some((message, Instant::now()));
+    }
+
+    fn check_status_timeout(&mut self) {
+        if let Some((_, timestamp)) = self.status_message {
+            if timestamp.elapsed().as_secs_f64() > 3.0 {
+                self.status_message = None;
+            }
+        }
+    }
 }
 
 impl eframe::App for FractalApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.check_status_timeout();
+
+        // Handle keyboard input
+        ctx.input(|i| {
+            // Zoom controls: +/- keys
+            if i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals) {
+                self.zoom_view(1.5);
+            }
+            if i.key_pressed(egui::Key::Minus) {
+                self.zoom_view(1.0 / 1.5);
+            }
+
+            // Pan controls: arrow keys
+            if i.key_pressed(egui::Key::ArrowLeft) {
+                self.pan_view(-1.0, 0.0);
+            }
+            if i.key_pressed(egui::Key::ArrowRight) {
+                self.pan_view(1.0, 0.0);
+            }
+            if i.key_pressed(egui::Key::ArrowUp) {
+                self.pan_view(0.0, 1.0);
+            }
+            if i.key_pressed(egui::Key::ArrowDown) {
+                self.pan_view(0.0, -1.0);
+            }
+
+            // Reset view: R key
+            if i.key_pressed(egui::Key::R) {
+                self.reset_view();
+                self.needs_render = true;
+            }
+
+            // Save: S key
+            if i.key_pressed(egui::Key::S) {
+                match self.save_image() {
+                    Ok(path) => {
+                        self.set_status(format!("Saved: {}", path.display()));
+                    }
+                    Err(e) => {
+                        self.set_status(format!("Error: {}", e));
+                    }
+                }
+            }
+        });
+
         egui::SidePanel::left("controls")
             .default_width(280.0)
             .show(ctx, |ui| {
@@ -219,13 +302,18 @@ impl eframe::App for FractalApp {
 
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("Reset View").clicked() {
+                    if ui.button("Reset View (R)").clicked() {
                         self.reset_view();
                         self.needs_render = true;
                     }
-                    if ui.button("Save").clicked() {
-                        if let Some(path) = self.save_image() {
-                            eprintln!("Saved: {:?}", path);
+                    if ui.button("Save (S)").clicked() {
+                        match self.save_image() {
+                            Ok(path) => {
+                                self.set_status(format!("Saved: {}", path.display()));
+                            }
+                            Err(e) => {
+                                self.set_status(format!("Error: {}", e));
+                            }
                         }
                     }
                 });
@@ -233,6 +321,12 @@ impl eframe::App for FractalApp {
                 if self.drag_start.is_some() {
                     ui.separator();
                     ui.label("Release to apply zoom");
+                }
+
+                // Show status message if present
+                if let Some((msg, _)) = &self.status_message {
+                    ui.separator();
+                    ui.label(egui::RichText::new(msg).color(egui::Color32::YELLOW));
                 }
 
                 ui.separator();
@@ -249,6 +343,13 @@ impl eframe::App for FractalApp {
                     ui.label("Rendering...");
                     ui.add(egui::ProgressBar::new(self.render_progress).desired_width(200.0));
                 }
+
+                ui.separator();
+                ui.label("Keyboard:");
+                ui.label("+/- : Zoom in/out");
+                ui.label("Arrows : Pan");
+                ui.label("R : Reset view");
+                ui.label("S : Save image");
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -398,11 +499,11 @@ impl eframe::App for FractalApp {
                 // Process one chunk
                 let chunk_size = ((height as f64 / 60.0).ceil() as u32).max(1);
                 let y_start = self.render_chunk_start;
-                let y_end = (y_start + chunk_size as usize).min(height as usize);
+                let y_end = (y_start + chunk_size).min(height);
 
-                if y_start < height as usize {
+                if y_start < height {
                     // Render this chunk
-                    let chunk_pixels: Vec<egui::Color32> = (y_start as u32..y_end as u32)
+                    let chunk_pixels: Vec<egui::Color32> = (y_start..y_end)
                         .into_par_iter()
                         .flat_map(|y| {
                             (0..width)
@@ -434,8 +535,8 @@ impl eframe::App for FractalApp {
 
                     // Copy to pixel buffer
                     if let Some(ref mut pixels) = self.render_pixels {
-                        let start_idx = y_start * width as usize;
-                        let chunk_len = (y_end - y_start) * width as usize;
+                        let start_idx = y_start as usize * width as usize;
+                        let chunk_len = (y_end - y_start) as usize * width as usize;
                         pixels[start_idx..start_idx + chunk_len].copy_from_slice(&chunk_pixels);
                     }
 
@@ -456,6 +557,7 @@ impl eframe::App for FractalApp {
                     self.is_rendering = false;
                     self.render_progress = 0.0;
                     self.zoom_preview = None;
+                    self.render_chunk_start = 0;
                     ctx.request_repaint();
                 }
             }
@@ -479,7 +581,7 @@ impl eframe::App for FractalApp {
     }
 }
 
-fn main() {
+fn main() -> eframe::Result {
     eprintln!("STARTING Fractal Explorer...");
 
     let options = eframe::NativeOptions {
@@ -489,9 +591,9 @@ fn main() {
         ..Default::default()
     };
 
-    let _ = eframe::run_native(
+    eframe::run_native(
         "Fractal Explorer",
         options,
         Box::new(|_cc| Ok(Box::new(FractalApp::default()))),
-    );
+    )
 }
