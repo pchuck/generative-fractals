@@ -46,6 +46,8 @@ impl FractalControls {
                 FractalType::Phoenix => "Phoenix",
                 FractalType::Multibrot => "Multibrot",
                 FractalType::Spider => "Spider",
+                FractalType::OrbitTrap => "Orbit Trap",
+                FractalType::PickoverStalk => "Pickover Stalk",
             })
             .show_ui(ui, |ui| {
                 ui.selectable_value(
@@ -66,6 +68,12 @@ impl FractalControls {
                 ui.selectable_value(&mut self.fractal_type, FractalType::Phoenix, "Phoenix");
                 ui.selectable_value(&mut self.fractal_type, FractalType::Multibrot, "Multibrot");
                 ui.selectable_value(&mut self.fractal_type, FractalType::Spider, "Spider");
+                ui.selectable_value(&mut self.fractal_type, FractalType::OrbitTrap, "Orbit Trap");
+                ui.selectable_value(
+                    &mut self.fractal_type,
+                    FractalType::PickoverStalk,
+                    "Pickover Stalk",
+                );
             });
 
         ui.separator();

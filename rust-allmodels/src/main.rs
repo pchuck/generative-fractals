@@ -209,6 +209,18 @@ struct FractalApp {
     render_chunk_start: u32,
     render_pixels: Option<Vec<egui::Color32>>,
     supersample_pixels: Option<Vec<egui::Color32>>, // 2x resolution when supersampling
+    // Pan optimization state
+    partial_render_regions: Vec<RenderRegion>,
+    current_region_index: usize,
+}
+
+/// Represents a rectangular region that needs to be rendered
+#[derive(Clone)]
+struct RenderRegion {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
 }
 
 struct ZoomPreview {
@@ -230,6 +242,8 @@ impl FractalApp {
             FractalType::Phoenix,
             FractalType::Multibrot,
             FractalType::Spider,
+            FractalType::OrbitTrap,
+            FractalType::PickoverStalk,
         ] {
             let (cx, cy) = ft.default_center();
             views.insert(
@@ -296,6 +310,8 @@ impl FractalApp {
             render_chunk_start: 0,
             render_pixels: None,
             supersample_pixels: None,
+            partial_render_regions: Vec::new(),
+            current_region_index: 0,
         };
 
         // Push initial view to history
@@ -314,6 +330,14 @@ impl FractalApp {
 
     fn set_view(&mut self, view: FractalViewState) {
         self.views.insert(self.controls.fractal_type, view);
+    }
+
+    /// Invalidate the render cache and request a full re-render.
+    /// Clears any partial render regions since we're doing a full render.
+    fn invalidate_cache(&mut self) {
+        self.needs_render = true;
+        self.partial_render_regions.clear();
+        self.current_region_index = 0;
     }
 
     fn calculate_adaptive_iterations(&self, zoom: f64) -> u32 {
@@ -364,6 +388,8 @@ impl FractalApp {
             FractalType::Phoenix => "phoenix",
             FractalType::Multibrot => "multibrot",
             FractalType::Spider => "spider",
+            FractalType::OrbitTrap => "orbit_trap",
+            FractalType::PickoverStalk => "pickover_stalk",
         };
         let palette_name = match self.controls.palette_type {
             PaletteType::Classic => "classic",
@@ -491,7 +517,7 @@ impl FractalApp {
         self.fractal = create_fractal(self.controls.fractal_type);
         self.controls.pending_fractal_params.clear();
 
-        self.needs_render = true;
+        self.invalidate_cache();
         self.set_status("Settings reset".to_string());
     }
 
@@ -509,7 +535,7 @@ impl FractalApp {
         }
 
         self.set_view(view);
-        self.needs_render = true;
+        self.invalidate_cache();
     }
 
     fn pan_view(&mut self, dx: f64, dy: f64) {
@@ -519,7 +545,117 @@ impl FractalApp {
         view.center_x += dx * pan_amount;
         view.center_y += dy * pan_amount;
         self.set_view(view);
+
+        // Try to optimize pan by shifting existing pixels
+        if let Some(ref mut cached) = self.cached_fractal_image {
+            let width = cached.width() as u32;
+            let height = cached.height() as u32;
+
+            // Calculate pixel shift to match fractal pan amount
+            // Fractal pan amount is 0.5 / zoom
+            // Horizontal visible range is 4.0 * aspect / zoom
+            // Vertical visible range is 4.0 / zoom
+            // Invert: when panning right (dx > 0), pixels shift left (negative shift)
+            let aspect = width as f64 / height as f64;
+            let shift_x = (-dx * width as f64 / (8.0 * aspect)) as i32;
+            let shift_y = (dy * height as f64 / 8.0) as i32; // dy > 0 means pan up, so shift pixels down
+
+            if shift_x != 0 || shift_y != 0 {
+                // Shift existing pixels
+                let mut new_pixels = vec![egui::Color32::BLACK; cached.pixels.len()];
+
+                for y in 0..height {
+                    for x in 0..width {
+                        let src_x = x as i32 - shift_x;
+                        let src_y = y as i32 - shift_y;
+
+                        if src_x >= 0 && src_x < width as i32 && src_y >= 0 && src_y < height as i32
+                        {
+                            let src_idx = (src_y as usize) * (width as usize) + (src_x as usize);
+                            let dst_idx = (y as usize) * (width as usize) + (x as usize);
+                            new_pixels[dst_idx] = cached.pixels[src_idx];
+                        }
+                    }
+                }
+
+                cached.pixels = new_pixels;
+                self.cached_width = width;
+                self.cached_height = height;
+
+                // Calculate regions that need rendering (the edges that are now empty)
+                self.partial_render_regions.clear();
+
+                if shift_x > 0 {
+                    // Panned left, need to render left edge
+                    self.partial_render_regions.push(RenderRegion {
+                        x: 0,
+                        y: 0,
+                        width: shift_x as u32,
+                        height,
+                    });
+                } else if shift_x < 0 {
+                    // Panned right, need to render right edge
+                    let shift_x_abs = (-shift_x) as u32;
+                    self.partial_render_regions.push(RenderRegion {
+                        x: width - shift_x_abs,
+                        y: 0,
+                        width: shift_x_abs,
+                        height,
+                    });
+                }
+
+                if shift_y > 0 {
+                    // Panned down, need to render top edge
+                    self.partial_render_regions.push(RenderRegion {
+                        x: 0,
+                        y: 0,
+                        width,
+                        height: shift_y as u32,
+                    });
+                } else if shift_y < 0 {
+                    // Panned up, need to render bottom edge
+                    let shift_y_abs = (-shift_y) as u32;
+                    self.partial_render_regions.push(RenderRegion {
+                        x: 0,
+                        y: height - shift_y_abs,
+                        width,
+                        height: shift_y_abs,
+                    });
+                }
+
+                // Remove overlapping areas from regions
+                self.partial_render_regions = self.simplify_regions(width, height);
+                self.current_region_index = 0;
+
+                if !self.partial_render_regions.is_empty() {
+                    self.needs_render = true;
+                    return; // Skip the full render
+                }
+            }
+        }
+
         self.needs_render = true;
+    }
+
+    /// Simplifies render regions to avoid double-rendering overlapping areas
+    fn simplify_regions(&self, width: u32, height: u32) -> Vec<RenderRegion> {
+        let mut regions = self.partial_render_regions.clone();
+
+        // Merge overlapping edge regions more intelligently
+        // For now, just return the regions as-is since edge regions shouldn't overlap much
+        regions.retain(|r| r.width > 0 && r.height > 0 && r.x < width && r.y < height);
+
+        // Clamp regions to screen bounds
+        for r in &mut regions {
+            if r.x + r.width > width {
+                r.width = width - r.x;
+            }
+            if r.y + r.height > height {
+                r.height = height - r.y;
+            }
+        }
+
+        regions
     }
 
     fn undo(&mut self) {
@@ -527,7 +663,7 @@ impl FractalApp {
             self.controls.fractal_type = fractal_type;
             self.fractal = create_fractal(fractal_type);
             self.views.insert(fractal_type, view);
-            self.needs_render = true;
+            self.invalidate_cache();
             self.set_status("Undo".to_string());
         }
     }
@@ -537,7 +673,7 @@ impl FractalApp {
             self.controls.fractal_type = fractal_type;
             self.fractal = create_fractal(fractal_type);
             self.views.insert(fractal_type, view);
-            self.needs_render = true;
+            self.invalidate_cache();
             self.set_status("Redo".to_string());
         }
     }
@@ -584,7 +720,7 @@ impl FractalApp {
             self.controls.pending_max_iterations = bookmark.max_iterations;
             self.controls.palette_type = bookmark.palette_type;
 
-            self.needs_render = true;
+            self.invalidate_cache();
             self.set_status(format!("Loaded: {}", bookmark.name));
         }
     }
@@ -731,7 +867,7 @@ impl eframe::App for FractalApp {
                 if i.key_pressed(egui::Key::R) && !i.modifiers.shift {
                     self.save_view_to_history();
                     self.reset_view();
-                    self.needs_render = true;
+                    self.invalidate_cache();
                 }
 
                 // Undo/Redo
@@ -775,7 +911,7 @@ impl eframe::App for FractalApp {
                             self.fractal.set_parameter(name, *value);
                         }
                     }
-                    self.needs_render = true;
+                    self.invalidate_cache();
                 }
 
                 if changed {
@@ -784,7 +920,7 @@ impl eframe::App for FractalApp {
                         view.fractal_params = self.controls.pending_fractal_params.clone();
                         view.palette_type = self.controls.palette_type;
                     }
-                    self.needs_render = true;
+                    self.invalidate_cache();
                 }
 
                 ui.separator();
@@ -794,7 +930,7 @@ impl eframe::App for FractalApp {
                     if ui.button("Reset View (R)").clicked() {
                         self.save_view_to_history();
                         self.reset_view();
-                        self.needs_render = true;
+                        self.invalidate_cache();
                     }
                     if ui
                         .button("Reset All")
@@ -867,13 +1003,13 @@ impl eframe::App for FractalApp {
                 let prev_supersampling = self.supersampling_enabled;
                 ui.checkbox(&mut self.supersampling_enabled, "Supersampling (2x)");
                 if self.supersampling_enabled != prev_supersampling {
-                    self.needs_render = true;
+                    self.invalidate_cache();
                 }
 
                 let prev_adaptive = self.adaptive_iterations;
                 ui.checkbox(&mut self.adaptive_iterations, "Adaptive Iterations");
                 if self.adaptive_iterations != prev_adaptive {
-                    self.needs_render = true;
+                    self.invalidate_cache();
                 }
                 if self.adaptive_iterations {
                     ui.label(format!(
@@ -885,7 +1021,7 @@ impl eframe::App for FractalApp {
                 let prev_minimap = self.minimap_enabled;
                 ui.checkbox(&mut self.minimap_enabled, "Show Minimap");
                 if self.minimap_enabled != prev_minimap {
-                    self.needs_render = true;
+                    self.invalidate_cache();
                 }
 
                 // Bookmark dialog
@@ -1081,11 +1217,11 @@ impl eframe::App for FractalApp {
             // Initial render check (pause when bookmark dialog is open)
             if !self.show_bookmark_dialog {
                 if self.cached_width == 0 || self.cached_height == 0 {
-                    self.needs_render = true;
+                    self.invalidate_cache();
                 } else if self.render_delay > 0 {
                     self.render_delay -= 1;
                     if self.render_delay == 0 {
-                        self.needs_render = true;
+                        self.invalidate_cache();
                     }
                 }
             }
@@ -1167,8 +1303,156 @@ impl eframe::App for FractalApp {
                 );
             }
 
+            // Partial rendering for pan optimization
+            if self.is_rendering && !self.partial_render_regions.is_empty() {
+                let display_width = self.render_target_width;
+                let display_height = self.render_target_height;
+
+                // Process one region at a time
+                if self.current_region_index < self.partial_render_regions.len() {
+                    let region = &self.partial_render_regions[self.current_region_index];
+
+                    // Handle supersampling
+                    let (render_width, render_height) = if self.supersampling_enabled {
+                        (display_width * 2, display_height * 2)
+                    } else {
+                        (display_width, display_height)
+                    };
+
+                    // Render this region in chunks
+                    let chunk_height = ((region.height as f64 / 10.0).ceil() as u32).max(1);
+                    let y_start = self.render_chunk_start;
+                    let y_end = (y_start + chunk_height).min(region.height);
+
+                    if y_start < region.height {
+                        let region_pixels: Vec<egui::Color32> = (y_start..y_end)
+                            .into_par_iter()
+                            .flat_map(|dy| {
+                                let y = region.y + dy;
+                                (region.x..region.x + region.width)
+                                    .map(|x| {
+                                        if self.supersampling_enabled {
+                                            // Supersample: render 2x2 block and average
+                                            let mut r_sum = 0u32;
+                                            let mut g_sum = 0u32;
+                                            let mut b_sum = 0u32;
+
+                                            for sy in 0..2 {
+                                                for sx in 0..2 {
+                                                    let sx_coord = x * 2 + sx;
+                                                    let sy_coord = y * 2 + sy;
+                                                    let (px, py) = screen_to_fractal(
+                                                        sx_coord,
+                                                        sy_coord,
+                                                        render_width,
+                                                        render_height,
+                                                        &self.render_target_view,
+                                                    );
+                                                    let iterations = self.fractal.compute(
+                                                        px,
+                                                        py,
+                                                        self.render_target_max_iter,
+                                                    );
+                                                    let color = if iterations
+                                                        >= self.render_target_max_iter
+                                                    {
+                                                        egui::Color32::BLACK
+                                                    } else {
+                                                        let t = iterations as f32
+                                                            / self.render_target_max_iter as f32;
+                                                        palette::get_color(
+                                                            self.render_target_palette_type,
+                                                            t,
+                                                            self.render_target_palette_offset,
+                                                        )
+                                                    };
+                                                    r_sum += color.r() as u32;
+                                                    g_sum += color.g() as u32;
+                                                    b_sum += color.b() as u32;
+                                                }
+                                            }
+
+                                            egui::Color32::from_rgb(
+                                                (r_sum / 4) as u8,
+                                                (g_sum / 4) as u8,
+                                                (b_sum / 4) as u8,
+                                            )
+                                        } else {
+                                            // Normal rendering
+                                            let (px, py) = screen_to_fractal(
+                                                x,
+                                                y,
+                                                display_width,
+                                                display_height,
+                                                &self.render_target_view,
+                                            );
+                                            let iterations = self.fractal.compute(
+                                                px,
+                                                py,
+                                                self.render_target_max_iter,
+                                            );
+                                            if iterations >= self.render_target_max_iter {
+                                                egui::Color32::BLACK
+                                            } else {
+                                                let t = iterations as f32
+                                                    / self.render_target_max_iter as f32;
+                                                palette::get_color(
+                                                    self.render_target_palette_type,
+                                                    t,
+                                                    self.render_target_palette_offset,
+                                                )
+                                            }
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .collect();
+
+                        // Update the cached image directly
+                        if let Some(ref mut cached) = self.cached_fractal_image {
+                            for dy in y_start..y_end {
+                                let y = region.y + dy;
+                                for dx in 0..region.width {
+                                    let x = region.x + dx;
+                                    let src_idx = ((dy - y_start) * region.width + dx) as usize;
+                                    let dst_idx = (y * display_width + x) as usize;
+                                    if dst_idx < cached.pixels.len() {
+                                        cached.pixels[dst_idx] = region_pixels[src_idx];
+                                    }
+                                }
+                            }
+                        }
+
+                        self.render_chunk_start = y_end;
+                        let region_progress = self.render_chunk_start as f32 / region.height as f32;
+                        let total_progress = (self.current_region_index as f32 + region_progress)
+                            / self.partial_render_regions.len() as f32;
+                        self.render_progress = total_progress;
+                        ctx.request_repaint();
+                    } else {
+                        // Move to next region
+                        self.current_region_index += 1;
+                        self.render_chunk_start = 0;
+                        ctx.request_repaint();
+                    }
+                } else {
+                    // All regions complete
+                    self.is_rendering = false;
+                    self.render_progress = 0.0;
+                    self.partial_render_regions.clear();
+                    self.current_region_index = 0;
+                    self.render_chunk_start = 0;
+
+                    if let Some(start_time) = self.render_start_time.take() {
+                        self.last_render_time = Some(start_time.elapsed().as_secs_f64());
+                    }
+
+                    ctx.request_repaint();
+                }
+            }
+
             // Incremental rendering
-            if self.is_rendering {
+            if self.is_rendering && self.partial_render_regions.is_empty() {
                 let display_width = self.render_target_width;
                 let display_height = self.render_target_height;
 
@@ -1334,27 +1618,41 @@ impl eframe::App for FractalApp {
                 self.render_target_palette_offset = self.controls.palette_offset;
                 self.render_target_palette_type = self.controls.palette_type;
                 self.render_chunk_start = 0;
+                self.current_region_index = 0;
 
-                if self.supersampling_enabled {
-                    // Allocate buffer for 2x supersampling
-                    self.supersample_pixels = Some(vec![
-                        egui::Color32::BLACK;
-                        (display_width * 2 * display_height * 2)
-                            as usize
-                    ]);
-                    self.render_pixels = None;
+                // Check if we have partial regions to render (pan optimization)
+                if !self.partial_render_regions.is_empty() {
+                    // Partial render - update cached dimensions
+                    self.cached_width = display_width;
+                    self.cached_height = display_height;
+                    self.is_rendering = true;
+                    self.render_start_time = Some(Instant::now());
+                    self.render_progress = 0.0;
+                    self.needs_render = false;
+                    ctx.request_repaint();
                 } else {
-                    self.render_pixels = Some(vec![
-                        egui::Color32::BLACK;
-                        (display_width * display_height) as usize
-                    ]);
-                    self.supersample_pixels = None;
-                }
+                    // Full render - allocate buffers
+                    if self.supersampling_enabled {
+                        // Allocate buffer for 2x supersampling
+                        self.supersample_pixels = Some(vec![
+                            egui::Color32::BLACK;
+                            (display_width * 2 * display_height * 2)
+                                as usize
+                        ]);
+                        self.render_pixels = None;
+                    } else {
+                        self.render_pixels = Some(vec![
+                            egui::Color32::BLACK;
+                            (display_width * display_height) as usize
+                        ]);
+                        self.supersample_pixels = None;
+                    }
 
-                self.is_rendering = true;
-                self.render_start_time = Some(Instant::now());
-                self.render_progress = 0.0;
-                ctx.request_repaint();
+                    self.is_rendering = true;
+                    self.render_start_time = Some(Instant::now());
+                    self.render_progress = 0.0;
+                    ctx.request_repaint();
+                }
             }
         });
     }

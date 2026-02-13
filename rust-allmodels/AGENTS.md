@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Interactive fractal explorer built with Rust, eframe/egui, and Rayon for parallel CPU rendering. Supports 10 fractal types (Mandelbrot, Julia, Burning Ship, Tricorn, Celtic, Newton, Biomorph, Phoenix, Multibrot, Spider) with 5 color palettes, per-fractal state persistence, bookmarks, and undo/redo history.
+Interactive fractal explorer built with Rust, eframe/egui, and Rayon for parallel CPU rendering. Supports 12 fractal types (Mandelbrot, Julia, Burning Ship, Tricorn, Celtic, Newton, Biomorph, Phoenix, Multibrot, Spider, Orbit Trap, Pickover Stalk) with 5 color palettes, per-fractal state persistence, bookmarks, undo/redo history, and optimized panning with pixel reuse.
 
 ## Build and Run Commands
 
@@ -72,7 +72,7 @@ pub fn save_config(&self) -> Result<(), String> {
 src/
 ├── main.rs           # Entry point, event loop, FractalApp state
 ├── ui/mod.rs         # Control panel, fractal/palette dropdowns
-├── fractal/mod.rs    # Fractal trait + 10 implementations
+├── fractal/mod.rs    # Fractal trait + 12 implementations
 ├── palette/mod.rs    # Color palette system (5 palettes)
 └── renderer/mod.rs   # Screen-to-fractal coordinate mapping
 ```
@@ -161,8 +161,9 @@ mod tests {
 - **Add UI parameter**: Add to fractal's `parameters()` → saved in `FractalViewState.fractal_params` → restored on switch
 - **Modify fractal computation**: Edit `compute()` method in fractal implementation
 - **Performance**: Use Rayon parallel iterators (`par_iter()`), chunked rendering for progress updates
+- **Pan optimization**: Arrow key panning shifts pixels and only renders edge regions (see `pan_view()` in main.rs)
 - **Bookmarks**: Saved in AppConfig and persist to `~/.config/fractal-explorer/config.json`
 
 ---
 
-**Last updated**: 2026-02-13
+**Last updated**: 2026-02-13 (12 fractals, pan optimization, supersampling fixes)
