@@ -1,6 +1,8 @@
 use eframe::egui;
+use image::{ImageBuffer, Rgb};
 use rayon::prelude::*;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 mod fractal;
 mod palette;
@@ -10,11 +12,13 @@ use fractal::{create_fractal, Fractal, FractalType};
 use palette::PaletteType;
 use renderer::screen_to_fractal;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub struct FractalViewState {
     pub center_x: f64,
     pub center_y: f64,
     pub zoom: f64,
+    pub max_iterations: u32,
+    pub fractal_params: HashMap<String, f64>,
 }
 
 struct FractalApp {
@@ -81,6 +85,8 @@ impl Default for FractalApp {
                 center_x: -0.5,
                 center_y: 0.0,
                 zoom: 1.0,
+                max_iterations: 200,
+                fractal_params: HashMap::new(),
             },
         );
         views.insert(
@@ -89,6 +95,18 @@ impl Default for FractalApp {
                 center_x: 0.0,
                 center_y: 0.0,
                 zoom: 1.0,
+                max_iterations: 200,
+                fractal_params: HashMap::new(),
+            },
+        );
+        views.insert(
+            FractalType::BurningShip,
+            FractalViewState {
+                center_x: -0.5,
+                center_y: -0.5,
+                zoom: 1.0,
+                max_iterations: 200,
+                fractal_params: HashMap::new(),
             },
         );
 
@@ -113,6 +131,8 @@ impl Default for FractalApp {
                 center_x: 0.0,
                 center_y: 0.0,
                 zoom: 1.0,
+                max_iterations: 200,
+                fractal_params: HashMap::new(),
             },
             render_target_max_iter: 200,
             render_target_palette_offset: 0.0,
@@ -127,7 +147,7 @@ impl FractalApp {
     fn get_view(&self) -> FractalViewState {
         self.views
             .get(&self.controls.fractal_type)
-            .copied()
+            .cloned()
             .unwrap_or_default()
     }
 
@@ -135,17 +155,67 @@ impl FractalApp {
         self.views.insert(self.controls.fractal_type, view);
     }
 
+    fn save_image(&self) -> Option<PathBuf> {
+        let image = self.cached_fractal_image.as_ref()?;
+        let fractal_name = match self.controls.fractal_type {
+            FractalType::Mandelbrot => "mandelbrot",
+            FractalType::Julia => "julia",
+            FractalType::BurningShip => "burning_ship",
+        };
+        let palette_name = match self.controls.palette_type {
+            PaletteType::Classic => "classic",
+            PaletteType::Fire => "fire",
+            PaletteType::Ice => "ice",
+            PaletteType::Grayscale => "grayscale",
+            PaletteType::Psychedelic => "psychedelic",
+        };
+        let width = image.width() as u32;
+        let height = image.height() as u32;
+        let mut img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::new(width, height);
+        for y in 0..height {
+            for x in 0..width {
+                let color = image[(x as usize, y as usize)];
+                img.put_pixel(x, y, Rgb([color.r(), color.g(), color.b()]));
+            }
+        }
+        let filename = format!(
+            "images/{}_{}_{}x{}.png",
+            fractal_name, palette_name, width, height
+        );
+        std::fs::create_dir_all("images").ok()?;
+        let path = PathBuf::from(&filename);
+        img.save(&path).ok()?;
+        Some(path)
+    }
+
     fn reset_view(&mut self) {
+        let current_max_iter = self.controls.max_iterations;
+        let current_params = self
+            .views
+            .get(&self.controls.fractal_type)
+            .map(|v| v.fractal_params.clone())
+            .unwrap_or_default();
         let default_view = match self.controls.fractal_type {
             FractalType::Mandelbrot => FractalViewState {
                 center_x: -0.5,
                 center_y: 0.0,
                 zoom: 1.0,
+                max_iterations: current_max_iter,
+                fractal_params: current_params,
             },
             FractalType::Julia => FractalViewState {
                 center_x: 0.0,
                 center_y: 0.0,
                 zoom: 1.0,
+                max_iterations: current_max_iter,
+                fractal_params: current_params,
+            },
+            FractalType::BurningShip => FractalViewState {
+                center_x: -0.5,
+                center_y: -0.5,
+                zoom: 1.0,
+                max_iterations: current_max_iter,
+                fractal_params: current_params,
             },
         };
         self.views.insert(self.controls.fractal_type, default_view);
@@ -163,18 +233,37 @@ impl eframe::App for FractalApp {
 
                 if prev_fractal != self.controls.fractal_type {
                     self.fractal = create_fractal(self.controls.fractal_type);
+                    if let Some(view) = self.views.get(&self.controls.fractal_type) {
+                        self.controls.max_iterations = view.max_iterations;
+                        self.controls.pending_max_iterations = view.max_iterations;
+                        self.controls.pending_fractal_params = view.fractal_params.clone();
+                        for (name, value) in &view.fractal_params {
+                            self.fractal.set_parameter(name, *value);
+                        }
+                    }
                     self.needs_render = true;
                 }
 
                 if changed {
+                    if let Some(view) = self.views.get_mut(&self.controls.fractal_type) {
+                        view.max_iterations = self.controls.max_iterations;
+                        view.fractal_params = self.controls.pending_fractal_params.clone();
+                    }
                     self.needs_render = true;
                 }
 
                 ui.separator();
-                if ui.button("Reset View").clicked() {
-                    self.reset_view();
-                    self.needs_render = true;
-                }
+                ui.horizontal(|ui| {
+                    if ui.button("Reset View").clicked() {
+                        self.reset_view();
+                        self.needs_render = true;
+                    }
+                    if ui.button("Save").clicked() {
+                        if let Some(path) = self.save_image() {
+                            eprintln!("Saved: {:?}", path);
+                        }
+                    }
+                });
 
                 if self.drag_start.is_some() {
                     ui.separator();
@@ -250,9 +339,9 @@ impl eframe::App for FractalApp {
 
                         // Get fractal coordinates of selection corners
                         let (fractal_min_x, fractal_max_y) =
-                            screen_to_fractal(min_x as u32, max_y as u32, width, height, view);
+                            screen_to_fractal(min_x as u32, max_y as u32, width, height, &view);
                         let (fractal_max_x, fractal_min_y) =
-                            screen_to_fractal(max_x as u32, min_y as u32, width, height, view);
+                            screen_to_fractal(max_x as u32, min_y as u32, width, height, &view);
 
                         // Center of selection in fractal coordinates
                         let new_center_x = (fractal_min_x + fractal_max_x) / 2.0;
@@ -266,6 +355,8 @@ impl eframe::App for FractalApp {
                             center_x: new_center_x,
                             center_y: new_center_y,
                             zoom: new_zoom,
+                            max_iterations: self.controls.max_iterations,
+                            fractal_params: view.fractal_params.clone(),
                         });
                         self.render_delay = 2;
                     }
@@ -356,7 +447,7 @@ impl eframe::App for FractalApp {
                                         y,
                                         width,
                                         height,
-                                        self.render_target_view,
+                                        &self.render_target_view,
                                     );
                                     let iterations =
                                         self.fractal.compute(px, py, self.render_target_max_iter);
@@ -437,6 +528,7 @@ impl FractalControls {
             .selected_text(match self.fractal_type {
                 FractalType::Mandelbrot => "Mandelbrot",
                 FractalType::Julia => "Julia",
+                FractalType::BurningShip => "Burning Ship",
             })
             .show_ui(ui, |ui| {
                 ui.selectable_value(
@@ -445,6 +537,11 @@ impl FractalControls {
                     "Mandelbrot",
                 );
                 ui.selectable_value(&mut self.fractal_type, FractalType::Julia, "Julia");
+                ui.selectable_value(
+                    &mut self.fractal_type,
+                    FractalType::BurningShip,
+                    "Burning Ship",
+                );
             });
 
         ui.separator();
