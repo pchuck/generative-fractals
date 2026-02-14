@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Interactive fractal explorer built with Rust, eframe/egui, and Rayon for parallel CPU rendering. Supports 12 fractal types (Mandelbrot, Julia, Burning Ship, Tricorn, Celtic, Newton, Biomorph, Phoenix, Multibrot, Spider, Orbit Trap, Pickover Stalk) with 5 color palettes, per-fractal state persistence, bookmarks, undo/redo history, and optimized panning with pixel reuse.
+Interactive fractal explorer built with Rust, eframe/egui, and Rayon for parallel CPU rendering. Supports 12 fractal types with 5 color palettes, 5 color processors, per-fractal state persistence, bookmarks, undo/redo history, pan optimization with pixel reuse, and thread count display.
 
 ## Build and Run Commands
 
@@ -37,6 +37,26 @@ make clean        # Clean build artifacts
 make deps         # Update dependencies
 ```
 
+## Distribution Commands
+
+```bash
+# Build all distribution packages
+make dist
+
+# Platform-specific distributions
+make dist-mac      # Creates dist/FractalExplorer-0.1.0-macOS.dmg
+make dist-linux    # Creates dist/fractal-explorer_0.1.0_amd64.deb
+make dist-windows  # Creates dist/FractalExplorer-0.1.0-windows.zip
+
+# Clean distribution files
+make dist-clean
+```
+
+**Distribution Details:**
+- **macOS (.dmg)**: Creates .app bundle with Info.plist, ready for distribution
+- **Linux (.deb)**: Debian package with desktop entry, installable via apt
+- **Windows (.zip)**: Portable ZIP with executable and install.bat script
+
 ## Code Style
 
 ### Rust Conventions
@@ -70,11 +90,15 @@ pub fn save_config(&self) -> Result<(), String> {
 
 ```
 src/
-├── main.rs           # Entry point, event loop, FractalApp state
-├── ui/mod.rs         # Control panel, fractal/palette dropdowns
-├── fractal/mod.rs    # Fractal trait + 12 implementations
-├── palette/mod.rs    # Color palette system (5 palettes)
-└── renderer/mod.rs   # Screen-to-fractal coordinate mapping
+├── main.rs              # Entry point, event loop, FractalApp state
+├── ui/mod.rs            # Control panel, fractal/palette/processor dropdowns
+├── fractal/mod.rs       # Fractal trait + 12 implementations
+├── fractal/registry.rs  # Fractal factory and registry
+├── palette/mod.rs       # Color palette system (5 palettes)
+├── color_pipeline.rs    # Color processor system (5 processors)
+├── command.rs           # Command pattern for undo/redo
+├── renderer/mod.rs      # Rendering engine with pan optimization
+└── viewport.rs          # Viewport and coordinate transforms
 ```
 
 ## Core Data Structures
@@ -88,6 +112,7 @@ pub struct FractalViewState {
     pub max_iterations: u32,
     pub fractal_params: HashMap<String, f64>,
     pub palette_type: PaletteType,
+    pub color_processor_type: ColorProcessorType,
 }
 ```
 
@@ -109,6 +134,21 @@ pub trait Palette: Send + Sync {
     fn color(&self, t: f32) -> Color32;
 }
 ```
+
+**ColorProcessor Trait:**
+```rust
+pub trait ColorProcessor: Send + Sync {
+    fn process(&self, result: &FractalResult, context: &ColorContext) -> Color32;
+    fn name(&self) -> &str;
+}
+```
+
+**ColorProcessorType:**
+- `Palette` - Direct palette mapping
+- `Smooth` - Logarithmic smoothing for continuous bands
+- `OrbitTrapReal` - Traps orbits near real axis
+- `OrbitTrapImag` - Traps orbits near imaginary axis
+- `OrbitTrapOrigin` - Traps orbits near origin
 
 ## Adding New Fractals
 
@@ -163,7 +203,9 @@ mod tests {
 - **Performance**: Use Rayon parallel iterators (`par_iter()`), chunked rendering for progress updates
 - **Pan optimization**: Arrow key panning shifts pixels and only renders edge regions (see `pan_view()` in main.rs)
 - **Bookmarks**: Saved in AppConfig and persist to `~/.config/fractal-explorer/config.json`
+- **Color Processor**: Add variant to `ColorProcessorType` → implement `ColorProcessor` trait → add to factory method
+- **Thread count display**: Uses `rayon::current_num_threads()` in `RenderStatus` struct
 
 ---
 
-**Last updated**: 2026-02-13 (12 fractals, pan optimization, supersampling fixes)
+**Last updated**: 2026-02-13 (12 fractals, 5 color processors, pan optimization, distribution packages for macOS/Linux/Windows)

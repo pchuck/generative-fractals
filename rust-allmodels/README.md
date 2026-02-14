@@ -50,10 +50,11 @@ Color processors transform fractal iteration data into colors using different al
 - **Mouse Coordinates** - Shows fractal coordinates (real, imaginary) under cursor
 - **Zoom Preview** - Blocky preview when zooming for instant feedback
 - **Progress Bar** - Shows rendering progress for large images
-- **Render Time** - Displays thread count and last render duration (e.g., "Parallel: 16 threads / Last render: 450ms")
+- **Render Status** - Displays "Parallel: X threads" and "Last render: 450ms" next to Fractal Type
 - **Supersampling** - 2x supersampling for smoother edges (toggle in UI)
-- **Mini-map** - Small overview (150×150) showing full fractal with current view rectangle
+- **Mini-map** - Small overview showing full fractal with current view rectangle
 - **Pan Optimization** - When panning with arrow keys, existing pixels are shifted and only new edge strips are recalculated (~87.5% performance improvement)
+- **About Dialog** - Shows App info with image and copyright
 
 ### State Management
 - **Per-Fractal State** - Each fractal remembers its view position, zoom, iterations, palette, color processor, and parameters
@@ -67,8 +68,8 @@ Color processors transform fractal iteration data into colors using different al
 - **Efficient Panning** - Arrow key panning reuses existing pixel data, only rendering new edge regions
 
 ### Export Options
-- **1x (Current)** - Fast save of cached image
-- **2x / 4x** - High-resolution export (renders at higher resolution)
+- **Save (S) with Radio Buttons** - Select 1x, 2x, or 4x resolution, then click Save
+- **High Resolution** - 2x and 4x renders at higher resolution for better quality
 - **Supersampling** - 2x internal render with box filter downsampling
 - All exports saved to `images/` directory with auto-generated filenames
 
@@ -76,6 +77,8 @@ Color processors transform fractal iteration data into colors using different al
 
 ```bash
 # Build and run
+make build && make run
+# or
 cargo build --release && cargo run --release
 
 # Debug mode with logging
@@ -83,31 +86,90 @@ RUST_LOG=debug cargo run
 
 # Run tests
 cargo test
+make test
 
 # Format and lint
 cargo fmt
 cargo clippy -- -D warnings
+make fmt
+make lint
 ```
 
-## Controls Reference
+## Distribution
 
-| Key | Action |
-|-----|--------|
-| Click + Drag | Select zoom region |
-| +/- | Zoom in/out |
-| Arrow Keys | Pan view (optimized with pixel reuse) |
-| R | Reset view |
-| Shift+R | Reset all settings |
-| Ctrl+Z | Undo |
-| Ctrl+Y | Redo |
-| S | Save image |
+Create platform-specific installers:
+
+```bash
+# Create macOS .dmg package
+make dist-mac
+
+# Create Linux .deb package (for apt install)
+make dist-linux
+
+# Create Windows installer package
+make dist-windows
+
+# Create all distributions
+make dist
+```
+
+**Distribution outputs:**
+- macOS: `dist/FractalExplorer-0.1.0-macOS.dmg`
+- Linux: `dist/fractal-explorer_0.1.0_amd64.deb`
+- Windows: `dist/FractalExplorer-0.1.0-windows.zip`
+
+### Installing on macOS
+```bash
+# Open the .dmg and drag to Applications
+make dist-mac
+open dist/FractalExplorer-0.1.0-macOS.dmg
+```
+
+### Installing on Linux (Debian/Ubuntu)
+```bash
+make dist-linux
+sudo apt install ./dist/fractal-explorer_0.1.0_amd64.deb
+# Run with: fractal-explorer
+```
+
+### Installing on Windows
+```bash
+make dist-windows
+# Extract FractalExplorer-0.1.0-windows.zip
+# Run install.bat as Administrator
+# Or manually copy FractalExplorer.exe to your preferred location
+```
+
+## UI Layout
+
+### Control Panel (Left Side)
+- **Fractal Type** | **Render Status** - Side by side with vertical separator
+  - Fractal dropdown on left
+  - Thread count and render time on right
+- **Color Palette** | **Color Processor** - Side by side with vertical separator
+  - Palette dropdown on left
+  - Color processor dropdown on right
+- **Iterations** - Slider for max iterations
+- **Fractal Parameters** - Dynamic controls based on fractal type
+- **Save (S)** - Button with 1x/2x/4x radio buttons inline
+- **Undo (^Z)** | **Redo (^Y)** - Side by side
+- **Bookmarks** - List with Add button, status messages shown here
+- **Settings** - Supersampling, Adaptive Iterations, Minimap toggles
+- **Mouse** | **Keyboard** - Input reference
+- **About** - Opens About dialog with image and copyright
+
+### Display Panel (Center)
+- Main fractal view
+- Minimap overlay (top-right, when enabled)
+- Selection rectangle (when dragging)
 
 ## Parameters
 
 ### Fractal-Specific
 - **Power** (Mandelbrot, Burning Ship, Tricorn, Celtic, Multibrot, Spider) - Exponent value (1.0-10.0)
 - **c_real / c_imag** (Julia, Phoenix) - Fractal constant (-2.0 to 2.0)
-- **Memory** (Phoenix) - Memory parameter creating flame effects (-1.0 to 1.0)
+- **Memory** (Phoenix) - Memory parameter creating flame effects (-1.0 to 1.0), default 0.55
+- **Default Phoenix**: c_real=0.0, c_imag=0.4, memory=0.55, iterations=100
 - **Escape Radius** (Newton, Biomorph) - Convergence threshold (4.0-64.0)
 - **Tolerance** (Newton, Biomorph) - Root detection sensitivity (0.0001-0.1)
 - **trap_x / trap_y** (Orbit Trap) - Trap point coordinates (-2.0 to 2.0)
@@ -188,6 +250,15 @@ src/
 - **Enable adaptive iterations** for automatic quality adjustment at different zoom levels
 - **Use arrow keys** for panning - reuses ~87.5% of pixels via optimization
 - Rendering is CPU-parallel using all available cores
+
+## Recent Fixes
+
+### Critical Bug Fixes (2026-02-13)
+- **Fractal Computation** - Fixed hardcoded `2.0` multiplier to use actual `power` parameter in all power-based fractals
+- **Burning Ship** - Moved `abs()` operations before power transformation for correct rendering
+- **Smooth Coloring** - Fixed formula and optimized with `norm_sqr()` to avoid sqrt operations
+- **Division by Zero Protection** - Added guards throughout viewport calculations
+- **Phoenix Defaults** - Changed to c_real=0.0, c_imag=0.4, memory=0.55 with 100 iterations
 
 ## License
 
