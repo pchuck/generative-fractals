@@ -1,8 +1,9 @@
 use eframe::egui::Color32;
 use rayon::prelude::*;
 
+use crate::color_pipeline::{ColorContext, ColorPipeline, FractalResult};
 use crate::fractal::Fractal;
-use crate::palette::{get_color, PaletteType};
+use crate::palette::PaletteType;
 use crate::FractalViewState;
 
 /// A rectangular region to render
@@ -15,7 +16,7 @@ pub struct RenderRegion {
 }
 
 /// Configuration for rendering operations
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RenderConfig {
     pub width: u32,
     pub height: u32,
@@ -23,6 +24,7 @@ pub struct RenderConfig {
     pub max_iterations: u32,
     pub palette_type: PaletteType,
     pub palette_offset: f32,
+    pub color_pipeline: ColorPipeline,
 }
 
 impl RenderConfig {
@@ -33,6 +35,17 @@ impl RenderConfig {
         } else {
             (self.width, self.height)
         }
+    }
+
+    /// Create a color context for the current render settings
+    fn color_context(&self) -> ColorContext {
+        ColorContext::new(
+            self.max_iterations,
+            self.palette_type,
+            self.palette_offset,
+            self.width,
+            self.height,
+        )
     }
 }
 
@@ -319,6 +332,7 @@ impl RenderEngine {
             max_iterations: max_iter,
             palette_type,
             palette_offset,
+            color_pipeline: ColorPipeline::default(),
         };
 
         (0..height)
@@ -361,12 +375,18 @@ fn compute_pixel(
     let (px, py) = screen_to_fractal(x, y, width, height, view);
     let iterations = fractal.compute(px, py, config.max_iterations);
 
-    if iterations >= config.max_iterations {
-        Color32::BLACK
+    let result = if iterations >= config.max_iterations {
+        FractalResult::inside_set(iterations)
     } else {
-        let t = iterations as f32 / config.max_iterations as f32;
-        get_color(config.palette_type, t, config.palette_offset)
-    }
+        FractalResult::escaped(
+            iterations,
+            num_complex::Complex64::new(0.0, 0.0),
+            Default::default(),
+        )
+    };
+
+    let context = config.color_context();
+    config.color_pipeline.process(&result, &context)
 }
 
 /// Compute pixel with 2x2 supersampling and averaging
@@ -386,6 +406,8 @@ fn compute_pixel_supersampled(
     let mut g_sum = 0u32;
     let mut b_sum = 0u32;
 
+    let context = config.color_context();
+
     for sy in 0..2 {
         for sx in 0..2 {
             let sx_coord = x * 2 + sx;
@@ -394,12 +416,17 @@ fn compute_pixel_supersampled(
             let (px, py) = screen_to_fractal(sx_coord, sy_coord, render_width, render_height, view);
             let iterations = fractal.compute(px, py, config.max_iterations);
 
-            let color = if iterations >= config.max_iterations {
-                Color32::BLACK
+            let result = if iterations >= config.max_iterations {
+                FractalResult::inside_set(iterations)
             } else {
-                let t = iterations as f32 / config.max_iterations as f32;
-                get_color(config.palette_type, t, config.palette_offset)
+                FractalResult::escaped(
+                    iterations,
+                    num_complex::Complex64::new(0.0, 0.0),
+                    Default::default(),
+                )
             };
+
+            let color = config.color_pipeline.process(&result, &context);
 
             r_sum += color.r() as u32;
             g_sum += color.g() as u32;
@@ -469,6 +496,7 @@ mod tests {
             max_iterations: 100,
             palette_type: PaletteType::Classic,
             palette_offset: 0.0,
+            color_pipeline: ColorPipeline::default(),
         };
         assert_eq!(config_normal.render_dimensions(), (100, 100));
 
@@ -479,6 +507,7 @@ mod tests {
             max_iterations: 100,
             palette_type: PaletteType::Classic,
             palette_offset: 0.0,
+            color_pipeline: ColorPipeline::default(),
         };
         assert_eq!(config_ss.render_dimensions(), (200, 200));
     }

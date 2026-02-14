@@ -5,12 +5,17 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
+mod color_pipeline;
+mod command;
 mod fractal;
 mod palette;
 mod renderer;
 mod ui;
 mod viewport;
 
+use command::{
+    AppState, CommandHistory, IterationCommand, PaletteCommand, ParameterCommand, ViewCommand,
+};
 use fractal::{registry::FractalRegistry, Fractal, FractalType};
 use palette::PaletteType;
 use renderer::{RenderConfig, RenderEngine, RenderRegion};
@@ -94,85 +99,6 @@ pub struct FractalViewState {
     pub palette_type: PaletteType,
 }
 
-/// View history entry for undo/redo
-#[derive(Clone)]
-struct ViewHistoryEntry {
-    fractal_type: FractalType,
-    view: FractalViewState,
-}
-
-/// Manages undo/redo history
-struct ViewHistory {
-    entries: Vec<ViewHistoryEntry>,
-    current_index: usize,
-    max_size: usize,
-}
-
-impl ViewHistory {
-    fn new(max_size: usize) -> Self {
-        ViewHistory {
-            entries: Vec::new(),
-            current_index: 0,
-            max_size,
-        }
-    }
-
-    fn push(&mut self, fractal_type: FractalType, view: FractalViewState) {
-        // Remove any entries after current index (redo history)
-        if self.current_index < self.entries.len() {
-            self.entries.truncate(self.current_index);
-        }
-
-        // Add new entry
-        self.entries.push(ViewHistoryEntry { fractal_type, view });
-
-        // Limit history size
-        if self.entries.len() > self.max_size {
-            self.entries.remove(0);
-        } else {
-            self.current_index += 1;
-        }
-    }
-
-    fn can_undo(&self) -> bool {
-        self.current_index > 1
-    }
-
-    fn can_redo(&self) -> bool {
-        self.current_index < self.entries.len()
-    }
-
-    fn undo(&mut self) -> Option<(FractalType, FractalViewState)> {
-        if self.can_undo() {
-            self.current_index -= 1;
-            let entry = &self.entries[self.current_index - 1];
-            Some((entry.fractal_type, entry.view.clone()))
-        } else {
-            None
-        }
-    }
-
-    fn redo(&mut self) -> Option<(FractalType, FractalViewState)> {
-        if self.can_redo() {
-            self.current_index += 1;
-            let entry = &self.entries[self.current_index - 1];
-            Some((entry.fractal_type, entry.view.clone()))
-        } else {
-            None
-        }
-    }
-
-    #[allow(dead_code)]
-    fn current(&self) -> Option<(FractalType, FractalViewState)> {
-        if self.current_index > 0 && self.current_index <= self.entries.len() {
-            let entry = &self.entries[self.current_index - 1];
-            Some((entry.fractal_type, entry.view.clone()))
-        } else {
-            None
-        }
-    }
-}
-
 struct FractalApp {
     fractal: Box<dyn Fractal>,
     controls: FractalControls,
@@ -192,8 +118,7 @@ struct FractalApp {
     last_render_time: Option<f64>, // in seconds
     status_message: Option<(String, Instant)>,
     mouse_fractal_pos: Option<(f64, f64)>,
-    view_history: ViewHistory,
-    last_saved_view: Option<(FractalType, FractalViewState)>,
+    command_histories: HashMap<FractalType, CommandHistory>,
     supersampling_enabled: bool,
     adaptive_iterations: bool,
     bookmarks: Vec<Bookmark>,
@@ -253,7 +178,7 @@ impl FractalApp {
             .create(config.default_fractal)
             .expect("Default fractal should be registered");
 
-        let mut app = FractalApp {
+        let app = FractalApp {
             fractal,
             controls,
             views,
@@ -272,8 +197,11 @@ impl FractalApp {
             last_render_time: None,
             status_message: None,
             mouse_fractal_pos: None,
-            view_history: ViewHistory::new(50),
-            last_saved_view: None,
+            command_histories: registry
+                .all_types()
+                .into_iter()
+                .map(|ft| (ft, CommandHistory::new(50)))
+                .collect(),
             supersampling_enabled: config.supersampling_enabled,
             adaptive_iterations: config.adaptive_iterations,
             bookmarks: config.bookmarks.clone(),
@@ -293,10 +221,6 @@ impl FractalApp {
             ),
         };
 
-        // Push initial view to history
-        let initial_view = app.get_view();
-        app.view_history.push(config.default_fractal, initial_view);
-
         app
     }
 
@@ -312,6 +236,12 @@ impl FractalApp {
             .get(&self.controls.fractal_type)
             .cloned()
             .unwrap_or_default()
+    }
+
+    fn get_command_history(&mut self) -> &mut CommandHistory {
+        self.command_histories
+            .entry(self.controls.fractal_type)
+            .or_insert_with(|| CommandHistory::new(50))
     }
 
     fn set_view(&mut self, view: FractalViewState) {
@@ -351,23 +281,93 @@ impl FractalApp {
         (base_iter + additional).min(2000) // Cap at 2000
     }
 
-    fn save_view_to_history(&mut self) {
-        let current = self.get_view();
-        let current_type = self.controls.fractal_type;
-
-        // Only save if view actually changed
-        if let Some((last_type, last_view)) = &self.last_saved_view {
-            if *last_type == current_type
-                && (last_view.center_x - current.center_x).abs() < 1e-10
-                && (last_view.center_y - current.center_y).abs() < 1e-10
-                && (last_view.zoom - current.zoom).abs() < 1e-10
-            {
-                return;
-            }
+    #[allow(dead_code)]
+    fn execute_view_command(&mut self, old_viewport: Viewport, new_viewport: Viewport) {
+        if old_viewport == new_viewport {
+            return;
         }
 
-        self.view_history.push(current_type, current.clone());
-        self.last_saved_view = Some((current_type, current));
+        let command = Box::new(ViewCommand::new(old_viewport, new_viewport));
+        let mut state = self.to_app_state();
+        self.get_command_history().execute(command, &mut state);
+        self.from_app_state(&state);
+    }
+
+    #[allow(dead_code)]
+    fn execute_iteration_command(&mut self, old_iter: u32, new_iter: u32) {
+        if old_iter == new_iter {
+            return;
+        }
+
+        let command = Box::new(IterationCommand::new(old_iter, new_iter));
+        let mut state = self.to_app_state();
+        self.get_command_history().execute(command, &mut state);
+        self.from_app_state(&state);
+    }
+
+    #[allow(dead_code)]
+    fn execute_palette_command(
+        &mut self,
+        old_palette: PaletteType,
+        new_palette: PaletteType,
+        old_offset: f32,
+        new_offset: f32,
+    ) {
+        if old_palette == new_palette && (old_offset - new_offset).abs() < 0.001 {
+            return;
+        }
+
+        let command = Box::new(PaletteCommand::new(
+            old_palette,
+            new_palette,
+            old_offset,
+            new_offset,
+        ));
+        let mut state = self.to_app_state();
+        self.get_command_history().execute(command, &mut state);
+        self.from_app_state(&state);
+    }
+
+    #[allow(dead_code)]
+    fn execute_parameter_command(&mut self, param_name: String, old_value: f64, new_value: f64) {
+        if (old_value - new_value).abs() < 1e-10 {
+            return;
+        }
+
+        let command = Box::new(ParameterCommand::new(param_name, old_value, new_value));
+        let mut state = self.to_app_state();
+        self.get_command_history().execute(command, &mut state);
+        self.from_app_state(&state);
+    }
+
+    fn to_app_state(&self) -> AppState {
+        AppState {
+            fractal_type: self.controls.fractal_type,
+            viewport: self.viewport,
+            max_iterations: self.controls.max_iterations,
+            palette_type: self.controls.palette_type,
+            palette_offset: self.controls.palette_offset,
+            fractal_params: self.get_view().fractal_params.clone(),
+        }
+    }
+
+    fn from_app_state(&mut self, state: &AppState) {
+        self.controls.fractal_type = state.fractal_type;
+        self.viewport = state.viewport;
+        self.controls.max_iterations = state.max_iterations;
+        self.controls.pending_max_iterations = state.max_iterations;
+        self.controls.palette_type = state.palette_type;
+        self.controls.palette_offset = state.palette_offset;
+
+        // Update the view for the current fractal
+        let mut view = self.get_view();
+        view.center_x = state.viewport.center().0;
+        view.center_y = state.viewport.center().1;
+        view.zoom = state.viewport.zoom();
+        view.max_iterations = state.max_iterations;
+        view.palette_type = state.palette_type;
+        view.fractal_params = state.fractal_params.clone();
+        self.set_view(view);
     }
 
     fn save_image(&self, scale_factor: u32) -> Result<PathBuf, String> {
@@ -478,7 +478,7 @@ impl FractalApp {
             fractal_params: current_params,
             palette_type: current_palette,
         };
-        self.views.insert(self.controls.fractal_type, default_view);
+        self.set_view(default_view);
     }
 
     fn reset_settings(&mut self) {
@@ -492,7 +492,7 @@ impl FractalApp {
             fractal_params: HashMap::new(),
             palette_type: PaletteType::Classic,
         };
-        self.views.insert(self.controls.fractal_type, default_view);
+        self.set_view(default_view);
 
         // Reset controls
         self.controls.max_iterations = 200;
@@ -510,7 +510,7 @@ impl FractalApp {
     }
 
     fn zoom_view(&mut self, factor: f64) {
-        self.save_view_to_history();
+        let old_viewport = self.viewport;
         let mut view = self.get_view();
         view.zoom *= factor;
 
@@ -522,17 +522,38 @@ impl FractalApp {
             self.controls.pending_max_iterations = new_iter;
         }
 
-        self.set_view(view);
+        self.set_view(view.clone());
+
+        // Execute command for history
+        let new_viewport = Viewport::from_view(
+            view.center_x,
+            view.center_y,
+            view.zoom,
+            self.cached_width.max(1),
+            self.cached_height.max(1),
+        );
+        self.execute_view_command(old_viewport, new_viewport);
+
         self.invalidate_cache();
     }
 
     fn pan_view(&mut self, dx: f64, dy: f64) {
-        self.save_view_to_history();
+        let old_viewport = self.viewport;
         let mut view = self.get_view();
         let pan_amount = 0.5 / view.zoom;
         view.center_x += dx * pan_amount;
         view.center_y += dy * pan_amount;
         self.set_view(view.clone());
+
+        // Execute command for history
+        let new_viewport = Viewport::from_view(
+            view.center_x,
+            view.center_y,
+            view.zoom,
+            self.cached_width.max(1),
+            self.cached_height.max(1),
+        );
+        self.execute_view_command(old_viewport, new_viewport);
 
         // Try to optimize pan by shifting existing pixels
         if let Some(ref mut cached) = self.cached_fractal_image {
@@ -552,22 +573,22 @@ impl FractalApp {
     }
 
     fn undo(&mut self) {
-        if let Some((fractal_type, view)) = self.view_history.undo() {
-            self.controls.fractal_type = fractal_type;
-            self.fractal = self.create_fractal(fractal_type);
-            self.views.insert(fractal_type, view);
+        let mut state = self.to_app_state();
+        if let Some(description) = self.get_command_history().undo(&mut state) {
+            self.from_app_state(&state);
+            self.fractal = self.create_fractal(state.fractal_type);
             self.invalidate_cache();
-            self.set_status("Undo".to_string());
+            self.set_status(format!("Undo: {}", description));
         }
     }
 
     fn redo(&mut self) {
-        if let Some((fractal_type, view)) = self.view_history.redo() {
-            self.controls.fractal_type = fractal_type;
-            self.fractal = self.create_fractal(fractal_type);
-            self.views.insert(fractal_type, view);
+        let mut state = self.to_app_state();
+        if let Some(description) = self.get_command_history().redo(&mut state) {
+            self.from_app_state(&state);
+            self.fractal = self.create_fractal(state.fractal_type);
             self.invalidate_cache();
-            self.set_status("Redo".to_string());
+            self.set_status(format!("Redo: {}", description));
         }
     }
 
@@ -595,7 +616,8 @@ impl FractalApp {
 
     fn load_bookmark(&mut self, index: usize) {
         if let Some(bookmark) = self.bookmarks.get(index).cloned() {
-            self.save_view_to_history();
+            // TODO: Integrate with CommandHistory
+            let _old_viewport = self.viewport;
             self.controls.fractal_type = bookmark.fractal_type;
             self.fractal = self.create_fractal(bookmark.fractal_type);
 
@@ -607,7 +629,7 @@ impl FractalApp {
                 fractal_params: HashMap::new(),
                 palette_type: bookmark.palette_type,
             };
-            self.views.insert(bookmark.fractal_type, view);
+            self.set_view(view);
 
             self.controls.max_iterations = bookmark.max_iterations;
             self.controls.pending_max_iterations = bookmark.max_iterations;
@@ -755,7 +777,8 @@ impl eframe::App for FractalApp {
 
                 // Reset view: R key
                 if i.key_pressed(egui::Key::R) && !i.modifiers.shift {
-                    self.save_view_to_history();
+                    // TODO: Integrate with CommandHistory
+                    let _old_viewport = self.viewport;
                     self.reset_view();
                     self.invalidate_cache();
                 }
@@ -792,6 +815,7 @@ impl eframe::App for FractalApp {
                 if prev_fractal != self.controls.fractal_type {
                     self.fractal = self.create_fractal(self.controls.fractal_type);
                     if let Some(view) = self.views.get(&self.controls.fractal_type) {
+                        let view = view.clone();
                         self.controls.max_iterations = view.max_iterations;
                         self.controls.pending_max_iterations = view.max_iterations;
                         self.controls.pending_fractal_params = view.fractal_params.clone();
@@ -800,6 +824,8 @@ impl eframe::App for FractalApp {
                         for (name, value) in &view.fractal_params {
                             self.fractal.set_parameter(name, *value);
                         }
+                        // Update viewport to match the restored view
+                        self.set_view(view);
                     }
                     self.invalidate_cache();
                 }
@@ -818,7 +844,8 @@ impl eframe::App for FractalApp {
                 // View controls
                 ui.horizontal(|ui| {
                     if ui.button("Reset View (R)").clicked() {
-                        self.save_view_to_history();
+                        // TODO: Integrate with CommandHistory
+                        let _old_viewport = self.viewport;
                         self.reset_view();
                         self.invalidate_cache();
                     }
@@ -827,7 +854,8 @@ impl eframe::App for FractalApp {
                         .on_hover_text("Reset view, palette, and parameters")
                         .clicked()
                     {
-                        self.save_view_to_history();
+                        // TODO: Integrate with CommandHistory
+                        let _old_viewport = self.viewport;
                         self.reset_settings();
                     }
                 });
@@ -849,15 +877,17 @@ impl eframe::App for FractalApp {
                     }
                 });
 
+                let can_undo = self.get_command_history().can_undo();
+                let can_redo = self.get_command_history().can_redo();
                 ui.horizontal(|ui| {
                     if ui
-                        .add_enabled(self.view_history.can_undo(), egui::Button::new("Undo"))
+                        .add_enabled(can_undo, egui::Button::new("Undo"))
                         .clicked()
                     {
                         self.undo();
                     }
                     if ui
-                        .add_enabled(self.view_history.can_redo(), egui::Button::new("Redo"))
+                        .add_enabled(can_redo, egui::Button::new("Redo"))
                         .clicked()
                     {
                         self.redo();
@@ -1084,14 +1114,14 @@ impl eframe::App for FractalApp {
                         let sel_height_px = max_y - min_y;
                         let new_zoom = view.zoom * (height as f64 / sel_height_px as f64);
 
-                        self.save_view_to_history();
-
                         // Calculate adaptive iterations if enabled
                         let new_max_iter = if self.adaptive_iterations {
                             self.calculate_adaptive_iterations(new_zoom)
                         } else {
                             self.controls.max_iterations
                         };
+
+                        let old_viewport = self.viewport;
 
                         self.set_view(FractalViewState {
                             center_x: new_center_x,
@@ -1101,6 +1131,16 @@ impl eframe::App for FractalApp {
                             fractal_params: view.fractal_params.clone(),
                             palette_type: self.controls.palette_type,
                         });
+
+                        // Execute command for history
+                        let new_viewport = Viewport::from_view(
+                            new_center_x,
+                            new_center_y,
+                            new_zoom,
+                            self.cached_width.max(1),
+                            self.cached_height.max(1),
+                        );
+                        self.execute_view_command(old_viewport, new_viewport);
 
                         // Update controls to reflect new iteration count
                         if self.adaptive_iterations {
@@ -1331,6 +1371,7 @@ impl eframe::App for FractalApp {
                     max_iterations: max_iter,
                     palette_type: self.controls.palette_type,
                     palette_offset: self.controls.palette_offset,
+                    color_pipeline: color_pipeline::ColorPipeline::default(),
                 };
 
                 self.render_engine.start_render(&config);
