@@ -27,6 +27,14 @@ Interactive fractal explorer built with Rust, eframe/egui, and Rayon for paralle
 - **Grayscale** - Black to white gradient
 - **Psychedelic** - HSV cycling with adjustable offset
 
+### Color Processors (5)
+Color processors transform fractal iteration data into colors using different algorithms:
+- **Standard Palette** - Direct palette mapping based on iteration count
+- **Smooth Coloring** - Continuous coloring using logarithmic smoothing for gradient bands
+- **Orbit Trap (Real Axis)** - Traps orbits near the real axis (y=0) for stalk-like patterns
+- **Orbit Trap (Imaginary Axis)** - Traps orbits near the imaginary axis (x=0) for organic patterns
+- **Orbit Trap (Origin)** - Traps orbits near the origin for center-focused patterns
+
 ### Interactive Controls
 - **Click + Drag** - Select zoom region
 - **Mouse Wheel** - Zoom in/out at cursor position
@@ -48,9 +56,9 @@ Interactive fractal explorer built with Rust, eframe/egui, and Rayon for paralle
 - **Pan Optimization** - When panning with arrow keys, existing pixels are shifted and only new edge strips are recalculated (~87.5% performance improvement)
 
 ### State Management
-- **Per-Fractal State** - Each fractal remembers its view position, zoom, iterations, palette, and parameters
-- **Undo/Redo** - 50-step history of view changes
-- **Bookmarks** - Save interesting locations with names, including position, zoom, iterations, and palette
+- **Per-Fractal State** - Each fractal remembers its view position, zoom, iterations, palette, color processor, and parameters
+- **Per-Fractal Undo/Redo** - Separate 50-step command history for each fractal type (view changes, parameters, palette, color processor, iterations are all tracked independently per fractal)
+- **Bookmarks** - Save interesting locations with names, including position, zoom, iterations, palette, and color processor
 - **Configuration File** - Saves window size, defaults, bookmarks, and settings to `~/.config/fractal-explorer/config.json`
 
 ### Smart Features
@@ -138,11 +146,14 @@ Saved settings include:
 
 ```
 src/
-├── main.rs           # Application entry, event loop, state management
-├── ui/mod.rs         # Control panel UI components
-├── fractal/mod.rs    # Fractal trait & 12 implementations
-├── palette/mod.rs    # Color palette system (5 palettes)
-└── renderer/mod.rs   # Screen-to-fractal coordinate mapping
+├── main.rs              # Application entry, event loop, state management
+├── ui/mod.rs            # Control panel UI components
+├── fractal/mod.rs       # Fractal trait & 12 implementations
+├── palette/mod.rs       # Color palette system (5 palettes)
+├── color_pipeline.rs    # Color processor system (5 processors)
+├── command.rs           # Command pattern for undo/redo
+├── renderer/mod.rs      # Screen-to-fractal coordinate mapping
+└── viewport.rs          # Viewport and coordinate transforms
 ```
 
 ### Key Components
