@@ -194,17 +194,28 @@ impl SmoothColoring {
     }
 
     /// Calculate smooth iteration count
-    /// Uses the formula: n + 1 - log(log(|z|)) / log(power)
+    /// Uses the formula: n - log(log(|z|)) / log(2)
     fn smooth_iterations(&self, result: &FractalResult, _context: &ColorContext) -> f32 {
         if !result.escaped || result.final_z.is_none() {
             return result.iterations as f32;
         }
 
-        let z = result.final_z.unwrap();
-        let log_z = z.norm().ln();
-        let smooth_add = 1.0 - (log_z.ln() / 2.0_f64.ln()).max(0.0);
+        let Some(z) = result.final_z else {
+            return result.iterations as f32;
+        };
 
-        (result.iterations as f32 - 1.0) + smooth_add as f32
+        // Use norm_sqr() to avoid sqrt, then adjust: log(sqrt(x)) = 0.5 * log(x)
+        let z_norm_sq = z.norm_sqr();
+        let log_z = 0.5 * z_norm_sq.ln();
+        let log_log_z = log_z.ln();
+
+        if !log_log_z.is_finite() {
+            return result.iterations as f32;
+        }
+
+        // Standard smooth iteration formula: nu = n - log(log|z|) / log(2)
+        let nu = result.iterations as f64 - log_log_z / std::f64::consts::LN_2;
+        nu as f32
     }
 }
 
@@ -285,7 +296,11 @@ impl ColorProcessor for OrbitTrapProcessor {
 
         // Normalize trap value to 0-1 range
         // Smaller distances = closer to trap = brighter
-        let t = (1.0 - (trap_value / self.threshold).min(1.0)) as f32;
+        let t = if self.threshold > 0.0 {
+            (1.0 - (trap_value / self.threshold).min(1.0)) as f32
+        } else {
+            0.0
+        };
 
         // Mix with palette based on iterations
         let iter_t = result.iterations as f32 / context.max_iterations as f32;

@@ -43,6 +43,9 @@ impl Viewport {
 
     /// Set the aspect ratio based on screen dimensions
     pub fn set_dimensions(&mut self, width: u32, height: u32) {
+        if height == 0 {
+            return; // Avoid division by zero
+        }
         self.aspect_ratio = width as f64 / height as f64;
     }
 
@@ -63,6 +66,9 @@ impl Viewport {
 
     /// Convert screen coordinates to fractal coordinates
     pub fn screen_to_world(&self, x: u32, y: u32, width: u32, height: u32) -> Complex64 {
+        if width == 0 || height == 0 || self.zoom == 0.0 {
+            return self.center; // Return center as fallback
+        }
         let uv_x = x as f64 / width as f64;
         let uv_y = y as f64 / height as f64;
 
@@ -74,6 +80,9 @@ impl Viewport {
 
     /// Convert world coordinates to screen coordinates (for minimap, etc.)
     pub fn world_to_screen(&self, world: Complex64, width: u32, height: u32) -> (i32, i32) {
+        if self.aspect_ratio == 0.0 || self.zoom == 0.0 {
+            return (0, 0); // Return origin as fallback
+        }
         let dx = (world.re - self.center.re) * self.zoom / (4.0 * self.aspect_ratio);
         let dy = -(world.im - self.center.im) * self.zoom / 4.0;
 
@@ -87,6 +96,9 @@ impl Viewport {
     /// Returns the actual pan amount in world coordinates
     pub fn pan(&mut self, dx_pixels: f64, dy_pixels: f64, screen_size: f64) -> (f64, f64) {
         // Calculate world units per pixel
+        if screen_size <= 0.0 || self.zoom <= 0.0 {
+            return (0.0, 0.0);
+        }
         let world_per_pixel = 4.0 / (screen_size * self.zoom);
 
         let world_dx = dx_pixels * world_per_pixel * self.aspect_ratio;
@@ -100,6 +112,9 @@ impl Viewport {
 
     /// Pan by a fixed amount (for keyboard navigation)
     pub fn pan_fixed(&mut self, dx: f64, dy: f64) {
+        if self.zoom <= 0.0 {
+            return;
+        }
         let pan_amount = 0.5 / self.zoom;
         self.center.re += dx * pan_amount;
         self.center.im += dy * pan_amount;
@@ -107,6 +122,12 @@ impl Viewport {
 
     /// Zoom by a factor, optionally keeping a point stationary
     pub fn zoom_by(&mut self, factor: f64, focus: Option<(u32, u32)>, width: u32, height: u32) {
+        const MIN_ZOOM: f64 = 1e-15;
+        const MAX_ZOOM: f64 = 1e15;
+
+        let new_zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+        let actual_factor = new_zoom / self.zoom;
+
         if let Some((fx, fy)) = focus {
             // Zoom towards focus point
             let focus_world = self.screen_to_world(fx, fy, width, height);
@@ -116,14 +137,14 @@ impl Viewport {
             let offset_y = focus_world.im - self.center.im;
 
             // Apply zoom
-            self.zoom *= factor;
+            self.zoom = new_zoom;
 
             // Adjust center to keep focus point stationary
-            self.center.re = focus_world.re - offset_x / factor;
-            self.center.im = focus_world.im - offset_y / factor;
+            self.center.re = focus_world.re - offset_x / actual_factor;
+            self.center.im = focus_world.im - offset_y / actual_factor;
         } else {
             // Simple zoom about center
-            self.zoom *= factor;
+            self.zoom = new_zoom;
         }
     }
 
@@ -134,6 +155,12 @@ impl Viewport {
 
     /// Get the visible rectangle in world coordinates (for minimap)
     pub fn visible_rect(&self) -> ((f64, f64), (f64, f64)) {
+        if self.zoom == 0.0 {
+            return (
+                (self.center.re, self.center.im),
+                (self.center.re, self.center.im),
+            );
+        }
         let half_width = 2.0 * self.aspect_ratio / self.zoom;
         let half_height = 2.0 / self.zoom;
 
@@ -149,6 +176,9 @@ impl Viewport {
         // Fractal pan: dx * 0.5 / zoom
         // Horizontal visible range: 4.0 * aspect / zoom
         // Vertical visible range: 4.0 / zoom
+        if self.aspect_ratio == 0.0 {
+            return (0, 0);
+        }
         let shift_x = (-dx * width as f64 / (8.0 * self.aspect_ratio)) as i32;
         let shift_y = (dy * height as f64 / 8.0) as i32;
 

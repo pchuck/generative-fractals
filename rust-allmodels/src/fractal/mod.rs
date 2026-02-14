@@ -161,7 +161,7 @@ impl Mandelbrot {
             }
 
             // Use De Moivre's theorem: (r*e^(iθ))^power = r^power * e^(i*power*θ)
-            let angle = 2.0 * z_im.atan2(z_re);
+            let angle = power * z_im.atan2(z_re);
             let radius = (r2 + i2).powf(power / 2.0);
 
             z_re = radius * angle.cos() + c_re;
@@ -264,7 +264,7 @@ impl Fractal for Julia {
                 return i;
             }
 
-            let angle = 2.0 * z_im.atan2(z_re);
+            let angle = power * z_im.atan2(z_re);
             let radius = (r2 + i2).powf(power / 2.0);
 
             z_re = radius * angle.cos() + c_re;
@@ -311,14 +311,15 @@ impl BurningShip {
                 return i;
             }
 
-            let angle = 2.0 * z_im.atan2(z_re);
+            // Burning Ship: apply abs BEFORE power transformation
+            z_re = z_re.abs();
+            z_im = z_im.abs();
+
+            let angle = power * z_im.atan2(z_re);
             let radius = (r2 + i2).powf(power / 2.0);
 
             z_re = radius * angle.cos() + c_re;
             z_im = radius * angle.sin() + c_im;
-
-            z_re = z_re.abs();
-            z_im = z_im.abs();
         }
 
         max_iter
@@ -364,7 +365,7 @@ impl Tricorn {
             }
 
             // Conjugation: flip the sign of the imaginary component
-            let angle = -2.0 * z_im.atan2(z_re);
+            let angle = -power * z_im.atan2(z_re);
             let radius = (r2 + i2).powf(power / 2.0);
 
             z_re = radius * angle.cos() + c_re;
@@ -413,7 +414,7 @@ impl Celtic {
                 return i;
             }
 
-            let angle = -2.0 * z_im.atan2(z_re);
+            let angle = -power * z_im.atan2(z_re);
             let radius = (r2 + i2).powf(power / 2.0);
 
             z_re = (radius * angle.cos() + c_re).abs();
