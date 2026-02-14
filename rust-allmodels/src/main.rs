@@ -13,9 +13,7 @@ mod renderer;
 mod ui;
 mod viewport;
 
-use command::{
-    AppState, CommandHistory, IterationCommand, PaletteCommand, ParameterCommand, ViewCommand,
-};
+use command::{AppState, CommandHistory, ViewCommand};
 use fractal::{registry::FractalRegistry, Fractal, FractalType};
 use palette::PaletteType;
 use renderer::{RenderConfig, RenderEngine, RenderRegion};
@@ -89,7 +87,7 @@ struct Bookmark {
     palette_type: PaletteType,
 }
 
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct FractalViewState {
     pub center_x: f64,
     pub center_y: f64,
@@ -108,6 +106,8 @@ struct FractalApp {
     drag_current: Option<egui::Pos2>,
     needs_render: bool,
     cached_fractal_image: Option<egui::ColorImage>,
+    cached_texture: Option<egui::TextureHandle>,
+    texture_dirty: bool,
     cached_width: u32,
     cached_height: u32,
     prev_fractal_image: Option<egui::ColorImage>,
@@ -126,8 +126,11 @@ struct FractalApp {
     show_bookmark_dialog: bool,
     bookmark_name_input: String,
     minimap_enabled: bool,
+    cached_minimap_texture: Option<egui::TextureHandle>,
+    minimap_dirty: bool,
     export_scale: u32,
     show_about_dialog: bool,
+    cached_about_texture: Option<egui::TextureHandle>,
     // Rendering engine
     render_engine: RenderEngine,
     // Current render configuration
@@ -203,6 +206,8 @@ impl FractalApp {
             drag_current: None,
             needs_render: true,
             cached_fractal_image: None,
+            cached_texture: None,
+            texture_dirty: false,
             cached_width: 0,
             cached_height: 0,
             prev_fractal_image: None,
@@ -225,8 +230,11 @@ impl FractalApp {
             show_bookmark_dialog: false,
             bookmark_name_input: String::new(),
             minimap_enabled: false,
+            cached_minimap_texture: None,
+            minimap_dirty: true,
             export_scale: 1,
             show_about_dialog: false,
+            cached_about_texture: None,
             render_engine: RenderEngine::default(),
             render_config: None,
             partial_render_regions: Vec::new(),
@@ -282,6 +290,8 @@ impl FractalApp {
     /// Clears any partial render regions since we're doing a full render.
     fn invalidate_cache(&mut self) {
         self.needs_render = true;
+        self.texture_dirty = true;
+        self.minimap_dirty = true;
         self.partial_render_regions.clear();
         self.current_region_index = 0;
     }
@@ -298,60 +308,15 @@ impl FractalApp {
         (base_iter + additional).min(2000) // Cap at 2000
     }
 
-    #[allow(dead_code)]
-    fn execute_view_command(&mut self, old_viewport: Viewport, new_viewport: Viewport) {
-        if old_viewport == new_viewport {
+    fn execute_view_command(&mut self, old_view: &FractalViewState, new_view: &FractalViewState) {
+        if (old_view.center_x - new_view.center_x).abs() < 1e-15
+            && (old_view.center_y - new_view.center_y).abs() < 1e-15
+            && (old_view.zoom - new_view.zoom).abs() < 1e-15
+        {
             return;
         }
 
-        let command = Box::new(ViewCommand::new(old_viewport, new_viewport));
-        let mut state = self.to_app_state();
-        self.get_command_history().execute(command, &mut state);
-        self.apply_app_state(&state);
-    }
-
-    #[allow(dead_code)]
-    fn execute_iteration_command(&mut self, old_iter: u32, new_iter: u32) {
-        if old_iter == new_iter {
-            return;
-        }
-
-        let command = Box::new(IterationCommand::new(old_iter, new_iter));
-        let mut state = self.to_app_state();
-        self.get_command_history().execute(command, &mut state);
-        self.apply_app_state(&state);
-    }
-
-    #[allow(dead_code)]
-    fn execute_palette_command(
-        &mut self,
-        old_palette: PaletteType,
-        new_palette: PaletteType,
-        old_offset: f32,
-        new_offset: f32,
-    ) {
-        if old_palette == new_palette && (old_offset - new_offset).abs() < 0.001 {
-            return;
-        }
-
-        let command = Box::new(PaletteCommand::new(
-            old_palette,
-            new_palette,
-            old_offset,
-            new_offset,
-        ));
-        let mut state = self.to_app_state();
-        self.get_command_history().execute(command, &mut state);
-        self.apply_app_state(&state);
-    }
-
-    #[allow(dead_code)]
-    fn execute_parameter_command(&mut self, param_name: String, old_value: f64, new_value: f64) {
-        if (old_value - new_value).abs() < 1e-10 {
-            return;
-        }
-
-        let command = Box::new(ParameterCommand::new(param_name, old_value, new_value));
+        let command = Box::new(ViewCommand::from_views(old_view, new_view));
         let mut state = self.to_app_state();
         self.get_command_history().execute(command, &mut state);
         self.apply_app_state(&state);
@@ -360,34 +325,21 @@ impl FractalApp {
     fn to_app_state(&self) -> AppState {
         AppState {
             fractal_type: self.controls.fractal_type,
-            viewport: self.viewport,
-            max_iterations: self.controls.max_iterations,
-            palette_type: self.controls.palette_type,
+            view: self.get_view(),
             palette_offset: self.controls.palette_offset,
-            color_processor_type: self.controls.color_processor_type,
-            fractal_params: self.get_view().fractal_params.clone(),
         }
     }
 
     fn apply_app_state(&mut self, state: &AppState) {
         self.controls.fractal_type = state.fractal_type;
-        self.viewport = state.viewport;
-        self.controls.max_iterations = state.max_iterations;
-        self.controls.pending_max_iterations = state.max_iterations;
-        self.controls.palette_type = state.palette_type;
+        self.controls.max_iterations = state.view.max_iterations;
+        self.controls.pending_max_iterations = state.view.max_iterations;
+        self.controls.palette_type = state.view.palette_type;
         self.controls.palette_offset = state.palette_offset;
-        self.controls.color_processor_type = state.color_processor_type;
+        self.controls.color_processor_type = state.view.color_processor_type;
 
-        // Update the view for the current fractal
-        let mut view = self.get_view();
-        view.center_x = state.viewport.center().0;
-        view.center_y = state.viewport.center().1;
-        view.zoom = state.viewport.zoom();
-        view.max_iterations = state.max_iterations;
-        view.palette_type = state.palette_type;
-        view.color_processor_type = state.color_processor_type;
-        view.fractal_params = state.fractal_params.clone();
-        self.set_view(view);
+        // Update the view and viewport in one place
+        self.set_view(state.view.clone());
     }
 
     fn save_image(&self, scale_factor: u32) -> Result<PathBuf, String> {
@@ -470,6 +422,7 @@ impl FractalApp {
             max_iter,
             self.controls.palette_type,
             self.controls.palette_offset,
+            color_pipeline::ColorPipeline::from_type(self.controls.color_processor_type),
         );
 
         for (i, color) in pixels.iter().enumerate() {
@@ -532,8 +485,8 @@ impl FractalApp {
     }
 
     fn zoom_view(&mut self, factor: f64) {
-        let old_viewport = self.viewport;
-        let mut view = self.get_view();
+        let old_view = self.get_view();
+        let mut view = old_view.clone();
         view.zoom *= factor;
 
         // If adaptive iterations is enabled, update max_iterations
@@ -547,35 +500,21 @@ impl FractalApp {
         self.set_view(view.clone());
 
         // Execute command for history
-        let new_viewport = Viewport::from_view(
-            view.center_x,
-            view.center_y,
-            view.zoom,
-            self.cached_width.max(1),
-            self.cached_height.max(1),
-        );
-        self.execute_view_command(old_viewport, new_viewport);
+        self.execute_view_command(&old_view, &view);
 
         self.invalidate_cache();
     }
 
     fn pan_view(&mut self, dx: f64, dy: f64) {
-        let old_viewport = self.viewport;
-        let mut view = self.get_view();
+        let old_view = self.get_view();
+        let mut view = old_view.clone();
         let pan_amount = 0.5 / view.zoom;
         view.center_x += dx * pan_amount;
         view.center_y += dy * pan_amount;
         self.set_view(view.clone());
 
         // Execute command for history
-        let new_viewport = Viewport::from_view(
-            view.center_x,
-            view.center_y,
-            view.zoom,
-            self.cached_width.max(1),
-            self.cached_height.max(1),
-        );
-        self.execute_view_command(old_viewport, new_viewport);
+        self.execute_view_command(&old_view, &view);
 
         // Try to optimize pan by shifting existing pixels
         if let Some(ref mut cached) = self.cached_fractal_image {
@@ -638,7 +577,6 @@ impl FractalApp {
 
     fn load_bookmark(&mut self, index: usize) {
         if let Some(bookmark) = self.bookmarks.get(index).cloned() {
-            let _old_viewport = self.viewport;
             self.controls.fractal_type = bookmark.fractal_type;
             self.fractal = self.create_fractal(bookmark.fractal_type);
 
@@ -689,18 +627,22 @@ impl FractalApp {
         }
     }
 
-    fn render_minimap(&self, ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    fn render_minimap(&mut self, ctx: &egui::Context) {
         if !self.minimap_enabled {
-            return None;
+            return;
+        }
+
+        if !self.minimap_dirty && self.cached_minimap_texture.is_some() {
+            // Just update the view rectangle overlay - reuse the cached fractal rendering
+            // We re-render only the view rectangle (cheap) on top of the cached fractal minimap
+            return;
         }
 
         let minimap_size = 150;
         let mut pixels = vec![egui::Color32::BLACK; minimap_size * minimap_size];
 
-        // Render a simplified version of the fractal
         let max_iter = 50; // Low quality for speed
 
-        // Create a viewport for the minimap showing the full fractal at zoom level 1
         let minimap_viewport = Viewport::from_view(
             self.controls.fractal_type.default_center().0,
             self.controls.fractal_type.default_center().1,
@@ -729,15 +671,13 @@ impl FractalApp {
         }
 
         // Draw view rectangle
-        // Calculate where the current view would be on the minimap
         let default_center = self.controls.fractal_type.default_center();
         let (view_center_x, view_center_y) = self.viewport.center();
         let view_zoom = self.viewport.zoom();
-        let view_width = 4.0 / view_zoom; // Width in fractal coordinates
-        let view_height = view_width; // Square aspect
+        let view_width = 4.0 / view_zoom;
+        let view_height = view_width;
 
-        // Map view center to minimap coordinates
-        let map_range = 4.0; // Minimap shows -2 to 2 range
+        let map_range = 4.0;
         let rel_x = (view_center_x - default_center.0 + map_range / 2.0) / map_range;
         let rel_y = (view_center_y - default_center.1 + map_range / 2.0) / map_range;
 
@@ -746,7 +686,6 @@ impl FractalApp {
         let rect_w = ((view_width / map_range) * minimap_size as f64) as i32;
         let rect_h = ((view_height / map_range) * minimap_size as f64) as i32;
 
-        // Draw rectangle outline
         for dy in -rect_h / 2..=rect_h / 2 {
             for dx in -rect_w / 2..=rect_w / 2 {
                 if dx == -rect_w / 2 || dx == rect_w / 2 || dy == -rect_h / 2 || dy == rect_h / 2 {
@@ -764,7 +703,9 @@ impl FractalApp {
             pixels,
         };
 
-        Some(ctx.load_texture("minimap", image, egui::TextureOptions::default()))
+        self.cached_minimap_texture =
+            Some(ctx.load_texture("minimap", image, egui::TextureOptions::default()));
+        self.minimap_dirty = false;
     }
 }
 
@@ -799,7 +740,6 @@ impl eframe::App for FractalApp {
 
                 // Reset view: R key
                 if i.key_pressed(egui::Key::R) && !i.modifiers.shift {
-                    let _old_viewport = self.viewport;
                     self.reset_view();
                     self.invalidate_cache();
                 }
@@ -873,7 +813,6 @@ impl eframe::App for FractalApp {
                 // View controls
                 ui.horizontal(|ui| {
                     if ui.button("Reset View (R)").clicked() {
-                        let _old_viewport = self.viewport;
                         self.reset_view();
                         self.invalidate_cache();
                     }
@@ -882,7 +821,6 @@ impl eframe::App for FractalApp {
                         .on_hover_text("Reset view, palette, and parameters")
                         .clicked()
                     {
-                        let _old_viewport = self.viewport;
                         self.reset_settings();
                     }
                 });
@@ -1037,33 +975,33 @@ impl eframe::App for FractalApp {
 
         // About dialog
         if self.show_about_dialog {
+            // Load about image once and cache it
+            if self.cached_about_texture.is_none() {
+                let image_path = "images/mandelbrot_grayscale_904x784.png";
+                if let Ok(image_data) = std::fs::read(image_path) {
+                    if let Ok(image) = image::load_from_memory(&image_data) {
+                        let rgba = image.to_rgba8();
+                        let size = [image.width() as _, image.height() as _];
+                        let pixels: Vec<egui::Color32> = rgba
+                            .pixels()
+                            .map(|p| egui::Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3]))
+                            .collect();
+                        let color_image = egui::ColorImage { size, pixels };
+                        self.cached_about_texture = Some(ctx.load_texture(
+                            "about_image",
+                            color_image,
+                            egui::TextureOptions::default(),
+                        ));
+                    }
+                }
+            }
+
             egui::Window::new("About")
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
-                    // Load and display the image at 1/2 size (452x392)
-                    let image_path = "images/mandelbrot_grayscale_904x784.png";
-                    if let Ok(image_data) = std::fs::read(image_path) {
-                        if let Ok(image) = image::load_from_memory(&image_data) {
-                            let rgba = image.to_rgba8();
-                            let size = [image.width() as _, image.height() as _];
-                            let pixels: Vec<egui::Color32> = rgba
-                                .pixels()
-                                .map(|p| {
-                                    egui::Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3])
-                                })
-                                .collect();
-                            let color_image = egui::ColorImage { size, pixels };
-                            let texture = ui.ctx().load_texture(
-                                "about_image",
-                                color_image,
-                                egui::TextureOptions::default(),
-                            );
-                            // Display at 1/2 size
-                            ui.image((texture.id(), egui::vec2(452.0, 392.0)));
-                        } else {
-                            ui.label("Failed to load image");
-                        }
+                    if let Some(ref texture) = self.cached_about_texture {
+                        ui.image((texture.id(), egui::vec2(452.0, 392.0)));
                     } else {
                         ui.label("Image not found");
                     }
@@ -1165,9 +1103,9 @@ impl eframe::App for FractalApp {
                             self.controls.max_iterations
                         };
 
-                        let old_viewport = self.viewport;
+                        let old_view = self.get_view();
 
-                        self.set_view(FractalViewState {
+                        let new_view = FractalViewState {
                             center_x: new_center_x,
                             center_y: new_center_y,
                             zoom: new_zoom,
@@ -1175,17 +1113,11 @@ impl eframe::App for FractalApp {
                             fractal_params: view.fractal_params.clone(),
                             palette_type: self.controls.palette_type,
                             color_processor_type: self.controls.color_processor_type,
-                        });
+                        };
+                        self.set_view(new_view.clone());
 
                         // Execute command for history
-                        let new_viewport = Viewport::from_view(
-                            new_center_x,
-                            new_center_y,
-                            new_zoom,
-                            self.cached_width.max(1),
-                            self.cached_height.max(1),
-                        );
-                        self.execute_view_command(old_viewport, new_viewport);
+                        self.execute_view_command(&old_view, &new_view);
 
                         // Update controls to reflect new iteration count
                         if self.adaptive_iterations {
@@ -1214,10 +1146,18 @@ impl eframe::App for FractalApp {
                 }
             }
 
-            // Main fractal display
-            if let Some(ref image) = self.cached_fractal_image {
-                let texture =
-                    ctx.load_texture("fractal", image.clone(), egui::TextureOptions::default());
+            // Main fractal display - update texture only when image changes
+            if self.texture_dirty {
+                if let Some(ref image) = self.cached_fractal_image {
+                    self.cached_texture = Some(ctx.load_texture(
+                        "fractal",
+                        image.clone(),
+                        egui::TextureOptions::default(),
+                    ));
+                    self.texture_dirty = false;
+                }
+            }
+            if let Some(ref texture) = self.cached_texture {
                 ui.put(
                     egui::Rect::from_min_size(rect.min, rect.size()),
                     egui::Image::new((texture.id(), rect.size())).uv(egui::Rect::from_min_max(
@@ -1228,8 +1168,9 @@ impl eframe::App for FractalApp {
             }
 
             // Draw minimap if enabled (must be before getting painter)
+            self.render_minimap(ctx);
             let minimap_rect = if self.minimap_enabled {
-                if let Some(minimap_texture) = self.render_minimap(ctx) {
+                if let Some(ref minimap_texture) = self.cached_minimap_texture {
                     let minimap_size = 150.0;
                     let minimap_rect = egui::Rect::from_min_size(
                         egui::pos2(rect.max.x - minimap_size - 10.0, rect.min.y + 10.0),
@@ -1330,6 +1271,7 @@ impl eframe::App for FractalApp {
                                     self.render_chunk_start = 0;
                                 }
 
+                                self.texture_dirty = true;
                                 self.render_progress = (self.current_region_index as f32
                                     + self.render_chunk_start as f32 / region.height as f32)
                                     / self.partial_render_regions.len() as f32;
@@ -1380,6 +1322,7 @@ impl eframe::App for FractalApp {
                                     size: [config.width as _, config.height as _],
                                     pixels,
                                 });
+                                self.texture_dirty = true;
                             }
 
                             self.cached_width = config.width;

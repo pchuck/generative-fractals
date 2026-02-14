@@ -1,7 +1,7 @@
 use eframe::egui::Color32;
 use rayon::prelude::*;
 
-use crate::color_pipeline::{ColorContext, ColorPipeline, FractalResult};
+use crate::color_pipeline::{ColorContext, ColorPipeline};
 use crate::fractal::Fractal;
 use crate::palette::PaletteType;
 use crate::FractalViewState;
@@ -307,6 +307,7 @@ impl RenderEngine {
     }
 
     /// Render a high-resolution image for export
+    #[allow(clippy::too_many_arguments)]
     pub fn render_high_res(
         &self,
         fractal: &dyn Fractal,
@@ -316,6 +317,7 @@ impl RenderEngine {
         max_iter: u32,
         palette_type: PaletteType,
         palette_offset: f32,
+        color_pipeline: ColorPipeline,
     ) -> Vec<Color32> {
         let config = RenderConfig {
             width,
@@ -324,7 +326,7 @@ impl RenderEngine {
             max_iterations: max_iter,
             palette_type,
             palette_offset,
-            color_pipeline: ColorPipeline::default(),
+            color_pipeline,
         };
 
         (0..height)
@@ -365,17 +367,7 @@ fn compute_pixel(
     config: &RenderConfig,
 ) -> Color32 {
     let (px, py) = screen_to_fractal(x, y, width, height, view);
-    let iterations = fractal.compute(px, py, config.max_iterations);
-
-    let result = if iterations >= config.max_iterations {
-        FractalResult::inside_set(iterations)
-    } else {
-        FractalResult::escaped(
-            iterations,
-            num_complex::Complex64::new(0.0, 0.0),
-            Default::default(),
-        )
-    };
+    let result = fractal.compute_full(px, py, config.max_iterations);
 
     let context = config.color_context();
     config.color_pipeline.process(&result, &context)
@@ -406,18 +398,7 @@ fn compute_pixel_supersampled(
             let sy_coord = y * 2 + sy;
 
             let (px, py) = screen_to_fractal(sx_coord, sy_coord, render_width, render_height, view);
-            let iterations = fractal.compute(px, py, config.max_iterations);
-
-            let result = if iterations >= config.max_iterations {
-                FractalResult::inside_set(iterations)
-            } else {
-                FractalResult::escaped(
-                    iterations,
-                    num_complex::Complex64::new(0.0, 0.0),
-                    Default::default(),
-                )
-            };
-
+            let result = fractal.compute_full(px, py, config.max_iterations);
             let color = config.color_pipeline.process(&result, &context);
 
             r_sum += color.r() as u32;

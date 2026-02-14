@@ -1,31 +1,37 @@
-use std::collections::HashMap;
-
 use crate::fractal::FractalType;
 use crate::palette::PaletteType;
 use crate::viewport::Viewport;
+use crate::FractalViewState;
 
-/// State that can be modified by commands
+/// State that can be modified by commands.
+/// Uses FractalViewState as the canonical representation,
+/// deriving Viewport on the fly when needed for coordinate transforms.
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub fractal_type: FractalType,
-    pub viewport: Viewport,
-    pub max_iterations: u32,
-    pub palette_type: PaletteType,
+    pub view: FractalViewState,
     pub palette_offset: f32,
-    pub color_processor_type: crate::color_pipeline::ColorProcessorType,
-    pub fractal_params: HashMap<String, f64>,
+}
+
+impl AppState {
+    /// Derive a Viewport from the current view state
+    pub fn viewport(&self, width: u32, height: u32) -> Viewport {
+        Viewport::from_view(
+            self.view.center_x,
+            self.view.center_y,
+            self.view.zoom,
+            width,
+            height,
+        )
+    }
 }
 
 impl Default for AppState {
     fn default() -> Self {
         Self {
             fractal_type: FractalType::Mandelbrot,
-            viewport: Viewport::default(),
-            max_iterations: 200,
-            palette_type: PaletteType::Classic,
+            view: FractalViewState::default(),
             palette_offset: 0.0,
-            color_processor_type: crate::color_pipeline::ColorProcessorType::default(),
-            fractal_params: HashMap::new(),
         }
     }
 }
@@ -54,40 +60,67 @@ impl Clone for Box<dyn Command> {
 /// Command for changing the view (pan/zoom)
 #[derive(Debug, Clone)]
 pub struct ViewCommand {
-    old_viewport: Viewport,
-    new_viewport: Viewport,
+    old_center_x: f64,
+    old_center_y: f64,
+    old_zoom: f64,
+    new_center_x: f64,
+    new_center_y: f64,
+    new_zoom: f64,
 }
 
+#[allow(dead_code)]
 impl ViewCommand {
-    pub fn new(old_viewport: Viewport, new_viewport: Viewport) -> Self {
+    pub fn new(
+        old_center_x: f64,
+        old_center_y: f64,
+        old_zoom: f64,
+        new_center_x: f64,
+        new_center_y: f64,
+        new_zoom: f64,
+    ) -> Self {
         Self {
-            old_viewport,
-            new_viewport,
+            old_center_x,
+            old_center_y,
+            old_zoom,
+            new_center_x,
+            new_center_y,
+            new_zoom,
+        }
+    }
+
+    /// Create from old and new FractalViewState
+    pub fn from_views(old_view: &FractalViewState, new_view: &FractalViewState) -> Self {
+        Self {
+            old_center_x: old_view.center_x,
+            old_center_y: old_view.center_y,
+            old_zoom: old_view.zoom,
+            new_center_x: new_view.center_x,
+            new_center_y: new_view.center_y,
+            new_zoom: new_view.zoom,
         }
     }
 }
 
 impl Command for ViewCommand {
     fn execute(&self, state: &mut AppState) {
-        state.viewport = self.new_viewport;
+        state.view.center_x = self.new_center_x;
+        state.view.center_y = self.new_center_y;
+        state.view.zoom = self.new_zoom;
     }
 
     fn undo(&self, state: &mut AppState) {
-        state.viewport = self.old_viewport;
+        state.view.center_x = self.old_center_x;
+        state.view.center_y = self.old_center_y;
+        state.view.zoom = self.old_zoom;
     }
 
     fn description(&self) -> String {
-        let (old_center_x, old_center_y) = self.old_viewport.center();
-        let (new_center_x, new_center_y) = self.new_viewport.center();
-        let old_zoom = self.old_viewport.zoom();
-        let new_zoom = self.new_viewport.zoom();
-
-        if (old_zoom - new_zoom).abs() > 0.01 {
-            format!("Zoom from {:.2} to {:.2}", old_zoom, new_zoom)
+        if (self.old_zoom - self.new_zoom).abs() > 0.01 {
+            format!("Zoom from {:.2} to {:.2}", self.old_zoom, self.new_zoom)
         } else {
             format!(
                 "Pan from ({:.4}, {:.4}) to ({:.4}, {:.4})",
-                old_center_x, old_center_y, new_center_x, new_center_y
+                self.old_center_x, self.old_center_y, self.new_center_x, self.new_center_y
             )
         }
     }
@@ -99,12 +132,14 @@ impl Command for ViewCommand {
 
 /// Command for changing fractal parameters
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ParameterCommand {
     param_name: String,
     old_value: f64,
     new_value: f64,
 }
 
+#[allow(dead_code)]
 impl ParameterCommand {
     pub fn new(param_name: String, old_value: f64, new_value: f64) -> Self {
         Self {
@@ -118,12 +153,14 @@ impl ParameterCommand {
 impl Command for ParameterCommand {
     fn execute(&self, state: &mut AppState) {
         state
+            .view
             .fractal_params
             .insert(self.param_name.clone(), self.new_value);
     }
 
     fn undo(&self, state: &mut AppState) {
         state
+            .view
             .fractal_params
             .insert(self.param_name.clone(), self.old_value);
     }
@@ -146,10 +183,8 @@ impl Command for ParameterCommand {
 pub struct FractalTypeCommand {
     old_type: FractalType,
     new_type: FractalType,
-    old_params: HashMap<String, f64>,
-    new_params: HashMap<String, f64>,
-    old_viewport: Viewport,
-    new_viewport: Viewport,
+    old_view: FractalViewState,
+    new_view: FractalViewState,
 }
 
 #[allow(dead_code)]
@@ -157,18 +192,14 @@ impl FractalTypeCommand {
     pub fn new(
         old_type: FractalType,
         new_type: FractalType,
-        old_params: HashMap<String, f64>,
-        new_params: HashMap<String, f64>,
-        old_viewport: Viewport,
-        new_viewport: Viewport,
+        old_view: FractalViewState,
+        new_view: FractalViewState,
     ) -> Self {
         Self {
             old_type,
             new_type,
-            old_params,
-            new_params,
-            old_viewport,
-            new_viewport,
+            old_view,
+            new_view,
         }
     }
 }
@@ -176,14 +207,12 @@ impl FractalTypeCommand {
 impl Command for FractalTypeCommand {
     fn execute(&self, state: &mut AppState) {
         state.fractal_type = self.new_type;
-        state.fractal_params = self.new_params.clone();
-        state.viewport = self.new_viewport;
+        state.view = self.new_view.clone();
     }
 
     fn undo(&self, state: &mut AppState) {
         state.fractal_type = self.old_type;
-        state.fractal_params = self.old_params.clone();
-        state.viewport = self.old_viewport;
+        state.view = self.old_view.clone();
     }
 
     fn description(&self) -> String {
@@ -197,11 +226,13 @@ impl Command for FractalTypeCommand {
 
 /// Command for changing iteration count
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct IterationCommand {
     old_iterations: u32,
     new_iterations: u32,
 }
 
+#[allow(dead_code)]
 impl IterationCommand {
     pub fn new(old_iterations: u32, new_iterations: u32) -> Self {
         Self {
@@ -213,11 +244,11 @@ impl IterationCommand {
 
 impl Command for IterationCommand {
     fn execute(&self, state: &mut AppState) {
-        state.max_iterations = self.new_iterations;
+        state.view.max_iterations = self.new_iterations;
     }
 
     fn undo(&self, state: &mut AppState) {
-        state.max_iterations = self.old_iterations;
+        state.view.max_iterations = self.old_iterations;
     }
 
     fn description(&self) -> String {
@@ -261,12 +292,12 @@ impl PaletteCommand {
 
 impl Command for PaletteCommand {
     fn execute(&self, state: &mut AppState) {
-        state.palette_type = self.new_palette;
+        state.view.palette_type = self.new_palette;
         state.palette_offset = self.new_offset;
     }
 
     fn undo(&self, state: &mut AppState) {
-        state.palette_type = self.old_palette;
+        state.view.palette_type = self.old_palette;
         state.palette_offset = self.old_offset;
     }
 
@@ -409,22 +440,19 @@ mod tests {
 
     #[test]
     fn test_view_command() {
-        let old_viewport = Viewport::new(0.0, 0.0, 1.0);
-        let new_viewport = Viewport::new(1.0, 1.0, 2.0);
-        let cmd = ViewCommand::new(old_viewport, new_viewport);
+        let cmd = ViewCommand::new(0.0, 0.0, 1.0, 1.0, 1.0, 2.0);
 
-        let mut state = AppState {
-            viewport: old_viewport,
-            ..Default::default()
-        };
+        let mut state = AppState::default();
 
         cmd.execute(&mut state);
-        assert_eq!(state.viewport.center(), (1.0, 1.0));
-        assert_eq!(state.viewport.zoom(), 2.0);
+        assert_eq!(state.view.center_x, 1.0);
+        assert_eq!(state.view.center_y, 1.0);
+        assert_eq!(state.view.zoom, 2.0);
 
         cmd.undo(&mut state);
-        assert_eq!(state.viewport.center(), (0.0, 0.0));
-        assert_eq!(state.viewport.zoom(), 1.0);
+        assert_eq!(state.view.center_x, 0.0);
+        assert_eq!(state.view.center_y, 0.0);
+        assert_eq!(state.view.zoom, 1.0);
     }
 
     #[test]
@@ -432,13 +460,13 @@ mod tests {
         let cmd = ParameterCommand::new("power".to_string(), 2.0, 3.0);
 
         let mut state = AppState::default();
-        state.fractal_params.insert("power".to_string(), 2.0);
+        state.view.fractal_params.insert("power".to_string(), 2.0);
 
         cmd.execute(&mut state);
-        assert_eq!(state.fractal_params.get("power"), Some(&3.0));
+        assert_eq!(state.view.fractal_params.get("power"), Some(&3.0));
 
         cmd.undo(&mut state);
-        assert_eq!(state.fractal_params.get("power"), Some(&2.0));
+        assert_eq!(state.view.fractal_params.get("power"), Some(&2.0));
     }
 
     #[test]
@@ -448,30 +476,23 @@ mod tests {
 
         assert!(!history.can_undo());
 
-        // Execute some commands
-        let cmd1 = Box::new(ViewCommand::new(
-            Viewport::default(),
-            Viewport::new(1.0, 0.0, 1.0),
-        ));
+        let cmd1 = Box::new(ViewCommand::new(-0.5, 0.0, 1.0, 1.0, 0.0, 1.0));
         history.execute(cmd1, &mut state);
-        assert_eq!(state.viewport.center().0, 1.0);
+        assert_eq!(state.view.center_x, 1.0);
 
-        let cmd2 = Box::new(ViewCommand::new(
-            Viewport::new(1.0, 0.0, 1.0),
-            Viewport::new(2.0, 0.0, 1.0),
-        ));
+        let cmd2 = Box::new(ViewCommand::new(1.0, 0.0, 1.0, 2.0, 0.0, 1.0));
         history.execute(cmd2, &mut state);
-        assert_eq!(state.viewport.center().0, 2.0);
+        assert_eq!(state.view.center_x, 2.0);
 
         // Undo
         assert!(history.can_undo());
         history.undo(&mut state);
-        assert_eq!(state.viewport.center().0, 1.0);
+        assert_eq!(state.view.center_x, 1.0);
 
         // Redo
         assert!(history.can_redo());
         history.redo(&mut state);
-        assert_eq!(state.viewport.center().0, 2.0);
+        assert_eq!(state.view.center_x, 2.0);
 
         // Clear
         history.clear();
@@ -484,22 +505,24 @@ mod tests {
         let mut history = CommandHistory::new(3);
         let mut state = AppState::default();
 
-        // Add 5 commands (max is 3)
         for i in 0..5 {
             let cmd = Box::new(ViewCommand::new(
-                Viewport::new(i as f64, 0.0, 1.0),
-                Viewport::new((i + 1) as f64, 0.0, 1.0),
+                i as f64,
+                0.0,
+                1.0,
+                (i + 1) as f64,
+                0.0,
+                1.0,
             ));
             history.execute(cmd, &mut state);
         }
 
         assert_eq!(history.len(), 3);
 
-        // Should only be able to undo 3 times
         assert!(history.undo(&mut state).is_some());
         assert!(history.undo(&mut state).is_some());
         assert!(history.undo(&mut state).is_some());
-        assert!(history.undo(&mut state).is_none()); // Nothing left to undo
+        assert!(history.undo(&mut state).is_none());
     }
 
     #[test]
@@ -507,36 +530,34 @@ mod tests {
         let mut history = CommandHistory::new(10);
         let mut state = AppState::default();
 
-        // Add 3 commands
         for i in 0..3 {
             let cmd = Box::new(ViewCommand::new(
-                Viewport::new(i as f64, 0.0, 1.0),
-                Viewport::new((i + 1) as f64, 0.0, 1.0),
+                i as f64,
+                0.0,
+                1.0,
+                (i + 1) as f64,
+                0.0,
+                1.0,
             ));
             history.execute(cmd, &mut state);
         }
 
-        // Undo one
         history.undo(&mut state);
         assert!(history.can_redo());
 
-        // Add a new command (should clear redo history)
-        let cmd = Box::new(ViewCommand::new(
-            Viewport::new(2.0, 0.0, 1.0),
-            Viewport::new(10.0, 0.0, 1.0),
-        ));
+        let cmd = Box::new(ViewCommand::new(2.0, 0.0, 1.0, 10.0, 0.0, 1.0));
         history.execute(cmd, &mut state);
 
         assert!(!history.can_redo());
-        assert_eq!(history.len(), 3); // Still 3, not 4
+        assert_eq!(history.len(), 3);
     }
 
     #[test]
     fn test_command_descriptions() {
-        let cmd = ViewCommand::new(Viewport::new(0.0, 0.0, 1.0), Viewport::new(1.0, 2.0, 1.0));
+        let cmd = ViewCommand::new(0.0, 0.0, 1.0, 1.0, 2.0, 1.0);
         assert!(cmd.description().contains("Pan"));
 
-        let zoom_cmd = ViewCommand::new(Viewport::new(0.0, 0.0, 1.0), Viewport::new(0.0, 0.0, 2.0));
+        let zoom_cmd = ViewCommand::new(0.0, 0.0, 1.0, 0.0, 0.0, 2.0);
         assert!(zoom_cmd.description().contains("Zoom"));
 
         let param_cmd = ParameterCommand::new("power".to_string(), 2.0, 3.0);

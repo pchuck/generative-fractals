@@ -1,4 +1,7 @@
+use num_complex::Complex64;
 use serde::{Deserialize, Serialize};
+
+use crate::color_pipeline::{FractalResult, OrbitData};
 
 pub mod registry;
 
@@ -75,6 +78,20 @@ pub trait Fractal: Send + Sync {
     /// - max_iter: Point is inside the set (did not escape)
     /// - lower values: Point escaped after that many iterations
     fn compute(&self, cx: f64, cy: f64, max_iter: u32) -> u32;
+
+    /// Computes the full fractal result including orbit data and final z value.
+    ///
+    /// The default implementation wraps `compute()` but does not provide
+    /// orbit data or final_z. Override this in fractal implementations
+    /// to provide rich data for smooth coloring and orbit trap processors.
+    fn compute_full(&self, cx: f64, cy: f64, max_iter: u32) -> FractalResult {
+        let iterations = self.compute(cx, cy, max_iter);
+        if iterations >= max_iter {
+            FractalResult::inside_set(iterations)
+        } else {
+            FractalResult::escaped(iterations, Complex64::new(0.0, 0.0), OrbitData::default())
+        }
+    }
 }
 
 /// Macro to generate Fractal implementations for simple power-based fractals.
@@ -116,6 +133,10 @@ macro_rules! impl_power_fractal {
 
             fn compute(&self, cx: f64, cy: f64, max_iter: u32) -> u32 {
                 self.compute_point(cx, cy, max_iter)
+            }
+
+            fn compute_full(&self, cx: f64, cy: f64, max_iter: u32) -> FractalResult {
+                self.compute_point_full(cx, cy, max_iter)
             }
         }
     };
@@ -160,15 +181,57 @@ impl Mandelbrot {
                 return i;
             }
 
-            // Use De Moivre's theorem: (r*e^(iθ))^power = r^power * e^(i*power*θ)
-            let angle = power * z_im.atan2(z_re);
-            let radius = (r2 + i2).powf(power / 2.0);
-
-            z_re = radius * angle.cos() + c_re;
-            z_im = radius * angle.sin() + c_im;
+            if (power - 2.0).abs() < 1e-10 {
+                // Fast path for power=2: use direct algebraic formula
+                let new_re = r2 - i2 + c_re;
+                let new_im = 2.0 * z_re * z_im + c_im;
+                z_re = new_re;
+                z_im = new_im;
+            } else {
+                // Use De Moivre's theorem: (r*e^(iθ))^power = r^power * e^(i*power*θ)
+                let angle = power * z_im.atan2(z_re);
+                let radius = (r2 + i2).powf(power / 2.0);
+                z_re = radius * angle.cos() + c_re;
+                z_im = radius * angle.sin() + c_im;
+            }
         }
 
         max_iter
+    }
+
+    /// Full computation with orbit data for color processors
+    fn compute_point_full(&self, cx: f64, cy: f64, max_iter: u32) -> FractalResult {
+        let mut z_re: f64 = 0.0;
+        let mut z_im: f64 = 0.0;
+        let c_re = cx;
+        let c_im = cy;
+        let power = self.power;
+        let mut orbit_data = OrbitData::new();
+
+        for i in 0..max_iter {
+            let r2 = z_re * z_re;
+            let i2 = z_im * z_im;
+
+            if r2 + i2 > 4.0 {
+                return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
+            }
+
+            if (power - 2.0).abs() < 1e-10 {
+                let new_re = r2 - i2 + c_re;
+                let new_im = 2.0 * z_re * z_im + c_im;
+                z_re = new_re;
+                z_im = new_im;
+            } else {
+                let angle = power * z_im.atan2(z_re);
+                let radius = (r2 + i2).powf(power / 2.0);
+                z_re = radius * angle.cos() + c_re;
+                z_im = radius * angle.sin() + c_im;
+            }
+
+            orbit_data.update(Complex64::new(z_re, z_im));
+        }
+
+        FractalResult::inside_set(max_iter)
     }
 }
 
@@ -264,14 +327,54 @@ impl Fractal for Julia {
                 return i;
             }
 
-            let angle = power * z_im.atan2(z_re);
-            let radius = (r2 + i2).powf(power / 2.0);
-
-            z_re = radius * angle.cos() + c_re;
-            z_im = radius * angle.sin() + c_im;
+            if (power - 2.0).abs() < 1e-10 {
+                let new_re = r2 - i2 + c_re;
+                let new_im = 2.0 * z_re * z_im + c_im;
+                z_re = new_re;
+                z_im = new_im;
+            } else {
+                let angle = power * z_im.atan2(z_re);
+                let radius = (r2 + i2).powf(power / 2.0);
+                z_re = radius * angle.cos() + c_re;
+                z_im = radius * angle.sin() + c_im;
+            }
         }
 
         max_iter
+    }
+
+    fn compute_full(&self, zx: f64, zy: f64, max_iter: u32) -> FractalResult {
+        let mut z_re = zx;
+        let mut z_im = zy;
+        let c_re = self.c_real;
+        let c_im = self.c_imag;
+        let power = self.power;
+        let mut orbit_data = OrbitData::new();
+
+        for i in 0..max_iter {
+            let r2 = z_re * z_re;
+            let i2 = z_im * z_im;
+
+            if r2 + i2 > 4.0 {
+                return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
+            }
+
+            if (power - 2.0).abs() < 1e-10 {
+                let new_re = r2 - i2 + c_re;
+                let new_im = 2.0 * z_re * z_im + c_im;
+                z_re = new_re;
+                z_im = new_im;
+            } else {
+                let angle = power * z_im.atan2(z_re);
+                let radius = (r2 + i2).powf(power / 2.0);
+                z_re = radius * angle.cos() + c_re;
+                z_im = radius * angle.sin() + c_im;
+            }
+
+            orbit_data.update(Complex64::new(z_re, z_im));
+        }
+
+        FractalResult::inside_set(max_iter)
     }
 }
 
@@ -315,14 +418,57 @@ impl BurningShip {
             z_re = z_re.abs();
             z_im = z_im.abs();
 
-            let angle = power * z_im.atan2(z_re);
-            let radius = (r2 + i2).powf(power / 2.0);
-
-            z_re = radius * angle.cos() + c_re;
-            z_im = radius * angle.sin() + c_im;
+            if (power - 2.0).abs() < 1e-10 {
+                let new_re = r2 - i2 + c_re;
+                let new_im = 2.0 * z_re * z_im + c_im;
+                z_re = new_re;
+                z_im = new_im;
+            } else {
+                let angle = power * z_im.atan2(z_re);
+                let radius = (r2 + i2).powf(power / 2.0);
+                z_re = radius * angle.cos() + c_re;
+                z_im = radius * angle.sin() + c_im;
+            }
         }
 
         max_iter
+    }
+
+    fn compute_point_full(&self, cx: f64, cy: f64, max_iter: u32) -> FractalResult {
+        let mut z_re: f64 = 0.0;
+        let mut z_im: f64 = 0.0;
+        let c_re = cx;
+        let c_im = cy;
+        let power = self.power;
+        let mut orbit_data = OrbitData::new();
+
+        for i in 0..max_iter {
+            let r2 = z_re * z_re;
+            let i2 = z_im * z_im;
+
+            if r2 + i2 > 4.0 {
+                return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
+            }
+
+            z_re = z_re.abs();
+            z_im = z_im.abs();
+
+            if (power - 2.0).abs() < 1e-10 {
+                let new_re = r2 - i2 + c_re;
+                let new_im = 2.0 * z_re * z_im + c_im;
+                z_re = new_re;
+                z_im = new_im;
+            } else {
+                let angle = power * z_im.atan2(z_re);
+                let radius = (r2 + i2).powf(power / 2.0);
+                z_re = radius * angle.cos() + c_re;
+                z_im = radius * angle.sin() + c_im;
+            }
+
+            orbit_data.update(Complex64::new(z_re, z_im));
+        }
+
+        FractalResult::inside_set(max_iter)
     }
 }
 
@@ -364,15 +510,56 @@ impl Tricorn {
                 return i;
             }
 
-            // Conjugation: flip the sign of the imaginary component
-            let angle = -power * z_im.atan2(z_re);
-            let radius = (r2 + i2).powf(power / 2.0);
-
-            z_re = radius * angle.cos() + c_re;
-            z_im = radius * angle.sin() + c_im;
+            if (power - 2.0).abs() < 1e-10 {
+                // Conjugation for power=2: conj(z)^2 = (a - bi)^2 = (a^2 - b^2) - 2abi
+                let new_re = r2 - i2 + c_re;
+                let new_im = -2.0 * z_re * z_im + c_im;
+                z_re = new_re;
+                z_im = new_im;
+            } else {
+                // Conjugation: flip the sign of the imaginary component
+                let angle = -power * z_im.atan2(z_re);
+                let radius = (r2 + i2).powf(power / 2.0);
+                z_re = radius * angle.cos() + c_re;
+                z_im = radius * angle.sin() + c_im;
+            }
         }
 
         max_iter
+    }
+
+    fn compute_point_full(&self, cx: f64, cy: f64, max_iter: u32) -> FractalResult {
+        let mut z_re: f64 = 0.0;
+        let mut z_im: f64 = 0.0;
+        let c_re = cx;
+        let c_im = cy;
+        let power = self.power;
+        let mut orbit_data = OrbitData::new();
+
+        for i in 0..max_iter {
+            let r2 = z_re * z_re;
+            let i2 = z_im * z_im;
+
+            if r2 + i2 > 4.0 {
+                return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
+            }
+
+            if (power - 2.0).abs() < 1e-10 {
+                let new_re = r2 - i2 + c_re;
+                let new_im = -2.0 * z_re * z_im + c_im;
+                z_re = new_re;
+                z_im = new_im;
+            } else {
+                let angle = -power * z_im.atan2(z_re);
+                let radius = (r2 + i2).powf(power / 2.0);
+                z_re = radius * angle.cos() + c_re;
+                z_im = radius * angle.sin() + c_im;
+            }
+
+            orbit_data.update(Complex64::new(z_re, z_im));
+        }
+
+        FractalResult::inside_set(max_iter)
     }
 }
 
@@ -414,14 +601,51 @@ impl Celtic {
                 return i;
             }
 
-            let angle = -power * z_im.atan2(z_re);
-            let radius = (r2 + i2).powf(power / 2.0);
-
-            z_re = (radius * angle.cos() + c_re).abs();
-            z_im = radius * angle.sin() + c_im;
+            if (power - 2.0).abs() < 1e-10 {
+                // Celtic for power=2: abs on real part + conjugation
+                z_re = (r2 - i2 + c_re).abs();
+                z_im = -2.0 * z_re * z_im + c_im;
+            } else {
+                let angle = -power * z_im.atan2(z_re);
+                let radius = (r2 + i2).powf(power / 2.0);
+                z_re = (radius * angle.cos() + c_re).abs();
+                z_im = radius * angle.sin() + c_im;
+            }
         }
 
         max_iter
+    }
+
+    fn compute_point_full(&self, cx: f64, cy: f64, max_iter: u32) -> FractalResult {
+        let mut z_re: f64 = 0.0;
+        let mut z_im: f64 = 0.0;
+        let c_re = cx;
+        let c_im = cy;
+        let power = self.power;
+        let mut orbit_data = OrbitData::new();
+
+        for i in 0..max_iter {
+            let r2 = z_re * z_re;
+            let i2 = z_im * z_im;
+
+            if r2 + i2 > 4.0 {
+                return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
+            }
+
+            if (power - 2.0).abs() < 1e-10 {
+                z_re = (r2 - i2 + c_re).abs();
+                z_im = -2.0 * z_re * z_im + c_im;
+            } else {
+                let angle = -power * z_im.atan2(z_re);
+                let radius = (r2 + i2).powf(power / 2.0);
+                z_re = (radius * angle.cos() + c_re).abs();
+                z_im = radius * angle.sin() + c_im;
+            }
+
+            orbit_data.update(Complex64::new(z_re, z_im));
+        }
+
+        FractalResult::inside_set(max_iter)
     }
 }
 
@@ -520,28 +744,20 @@ impl Fractal for Newton {
             }
 
             // Compute z^2 and z^3 for Newton's method
-            // z^2 = (a + bi)^2 = (a^2 - b^2) + 2abi
             let z_re2 = z_re * z_re;
             let z_im2 = z_im * z_im;
-
-            // z^3 = z^2 * z = (a^2 - b^2)a - 2ab*b + i[(a^2 - b^2)b + 2ab*a]
-            //     = a(a^2 - 3b^2) + i*b(3a^2 - b^2)
             let z_re3 = z_re2 * z_re - 3.0 * z_re * z_im2;
             let z_im3 = 3.0 * z_re2 * z_im - z_im2 * z_im;
 
-            // f(z) = z^3 - 1
             let f_real = z_re3 - 1.0;
             let f_imag = z_im3;
 
-            // f'(z) = 3*z^2
             let deriv_real = 3.0 * (z_re2 - z_im2);
             let deriv_imag = 6.0 * z_re * z_im;
 
-            // Newton's step: z = z - f(z)/f'(z)
-            // Division: (a+bi)/(c+di) = [(ac+bd) + i(bc-ad)] / (c^2+d^2)
             let denom = deriv_real * deriv_real + deriv_imag * deriv_imag;
             if denom.abs() < 1e-20 {
-                break; // Singularity - avoid division by zero
+                break;
             }
 
             let new_re = z_re - (f_real * deriv_real + f_imag * deriv_imag) / denom;
@@ -552,6 +768,58 @@ impl Fractal for Newton {
         }
 
         max_iter // Did not converge to a root
+    }
+
+    fn compute_full(&self, cx: f64, cy: f64, max_iter: u32) -> FractalResult {
+        let mut z_re = cx;
+        let mut z_im = cy;
+        let tolerance = self.tolerance;
+        let tolerance2 = tolerance * tolerance;
+        let mut orbit_data = OrbitData::new();
+
+        let root1_re = 1.0;
+        let root1_im = 0.0;
+        let root2_re = -0.5;
+        let root2_im = 0.8660254037844386;
+        let root3_re = -0.5;
+        let root3_im = -0.8660254037844386;
+
+        for i in 0..max_iter {
+            let dist2_1 = (z_re - root1_re).powi(2) + (z_im - root1_im).powi(2);
+            let dist2_2 = (z_re - root2_re).powi(2) + (z_im - root2_im).powi(2);
+            let dist2_3 = (z_re - root3_re).powi(2) + (z_im - root3_im).powi(2);
+
+            if dist2_1 < tolerance2 || dist2_2 < tolerance2 || dist2_3 < tolerance2 {
+                // Converged - treat as "escaped" for coloring purposes with inverted count
+                return FractalResult::escaped(
+                    max_iter - i,
+                    Complex64::new(z_re, z_im),
+                    orbit_data,
+                );
+            }
+
+            let z_re2 = z_re * z_re;
+            let z_im2 = z_im * z_im;
+            let z_re3 = z_re2 * z_re - 3.0 * z_re * z_im2;
+            let z_im3 = 3.0 * z_re2 * z_im - z_im2 * z_im;
+
+            let f_real = z_re3 - 1.0;
+            let f_imag = z_im3;
+            let deriv_real = 3.0 * (z_re2 - z_im2);
+            let deriv_imag = 6.0 * z_re * z_im;
+
+            let denom = deriv_real * deriv_real + deriv_imag * deriv_imag;
+            if denom.abs() < 1e-20 {
+                break;
+            }
+
+            z_re -= (f_real * deriv_real + f_imag * deriv_imag) / denom;
+            z_im -= (f_imag * deriv_real - f_real * deriv_imag) / denom;
+
+            orbit_data.update(Complex64::new(z_re, z_im));
+        }
+
+        FractalResult::inside_set(max_iter)
     }
 }
 
@@ -625,7 +893,6 @@ impl Fractal for Biomorph {
         let tolerance2 = tolerance * tolerance;
         let escape_r2 = self.escape_radius * self.escape_radius;
 
-        // Roots of z^3 - 1 = 0 (same as Newton)
         let root1_re = 1.0;
         let root1_im = 0.0;
         let root2_re = -0.5;
@@ -634,22 +901,19 @@ impl Fractal for Biomorph {
         let root3_im = -0.8660254037844386;
 
         for i in 0..max_iter {
-            // Check convergence to any root
             let dist2_1 = (z_re - root1_re).powi(2) + (z_im - root1_im).powi(2);
             let dist2_2 = (z_re - root2_re).powi(2) + (z_im - root2_im).powi(2);
             let dist2_3 = (z_re - root3_re).powi(2) + (z_im - root3_im).powi(2);
 
             if dist2_1 < tolerance2 || dist2_2 < tolerance2 || dist2_3 < tolerance2 {
-                return max_iter - i; // Converged - bright color
+                return max_iter - i;
             }
 
-            // Check escape (unlike pure Newton)
             let r2 = z_re * z_re + z_im * z_im;
             if r2 > escape_r2 {
-                return i; // Escaped - return iteration count for coloring
+                return i;
             }
 
-            // Newton's method iteration (same as Newton fractal)
             let z_re2 = z_re * z_re;
             let z_im2 = z_im * z_im;
             let z_re3 = z_re2 * z_re - 3.0 * z_re * z_im2;
@@ -657,7 +921,6 @@ impl Fractal for Biomorph {
 
             let f_real = z_re3 - 1.0;
             let f_imag = z_im3;
-
             let deriv_real = 3.0 * (z_re2 - z_im2);
             let deriv_imag = 6.0 * z_re * z_im;
 
@@ -666,14 +929,68 @@ impl Fractal for Biomorph {
                 break;
             }
 
-            let new_re = z_re - (f_real * deriv_real + f_imag * deriv_imag) / denom;
-            let new_im = z_im - (f_imag * deriv_real - f_real * deriv_imag) / denom;
-
-            z_re = new_re;
-            z_im = new_im;
+            z_re -= (f_real * deriv_real + f_imag * deriv_imag) / denom;
+            z_im -= (f_imag * deriv_real - f_real * deriv_imag) / denom;
         }
 
-        max_iter // Neither converged nor escaped
+        max_iter
+    }
+
+    fn compute_full(&self, cx: f64, cy: f64, max_iter: u32) -> FractalResult {
+        let mut z_re = cx;
+        let mut z_im = cy;
+        let tolerance = self.tolerance;
+        let tolerance2 = tolerance * tolerance;
+        let escape_r2 = self.escape_radius * self.escape_radius;
+        let mut orbit_data = OrbitData::new();
+
+        let root1_re = 1.0;
+        let root1_im = 0.0;
+        let root2_re = -0.5;
+        let root2_im = 0.8660254037844386;
+        let root3_re = -0.5;
+        let root3_im = -0.8660254037844386;
+
+        for i in 0..max_iter {
+            let dist2_1 = (z_re - root1_re).powi(2) + (z_im - root1_im).powi(2);
+            let dist2_2 = (z_re - root2_re).powi(2) + (z_im - root2_im).powi(2);
+            let dist2_3 = (z_re - root3_re).powi(2) + (z_im - root3_im).powi(2);
+
+            if dist2_1 < tolerance2 || dist2_2 < tolerance2 || dist2_3 < tolerance2 {
+                return FractalResult::escaped(
+                    max_iter - i,
+                    Complex64::new(z_re, z_im),
+                    orbit_data,
+                );
+            }
+
+            let r2 = z_re * z_re + z_im * z_im;
+            if r2 > escape_r2 {
+                return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
+            }
+
+            let z_re2 = z_re * z_re;
+            let z_im2 = z_im * z_im;
+            let z_re3 = z_re2 * z_re - 3.0 * z_re * z_im2;
+            let z_im3 = 3.0 * z_re2 * z_im - z_im2 * z_im;
+
+            let f_real = z_re3 - 1.0;
+            let f_imag = z_im3;
+            let deriv_real = 3.0 * (z_re2 - z_im2);
+            let deriv_imag = 6.0 * z_re * z_im;
+
+            let denom = deriv_real * deriv_real + deriv_imag * deriv_imag;
+            if denom.abs() < 1e-20 {
+                break;
+            }
+
+            z_re -= (f_real * deriv_real + f_imag * deriv_imag) / denom;
+            z_im -= (f_imag * deriv_real - f_real * deriv_imag) / denom;
+
+            orbit_data.update(Complex64::new(z_re, z_im));
+        }
+
+        FractalResult::inside_set(max_iter)
     }
 }
 
@@ -779,6 +1096,38 @@ impl Fractal for Phoenix {
 
         max_iter
     }
+
+    fn compute_full(&self, cx: f64, cy: f64, max_iter: u32) -> FractalResult {
+        let mut z_re = cx;
+        let mut z_im = cy;
+        let mut z_prev_re = 0.0;
+        let mut z_prev_im = 0.0;
+        let c_re = self.c_real;
+        let c_im = self.c_imag;
+        let p = self.memory;
+        let mut orbit_data = OrbitData::new();
+
+        for i in 0..max_iter {
+            let r2 = z_re * z_re;
+            let i2 = z_im * z_im;
+
+            if r2 + i2 > 4.0 {
+                return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
+            }
+
+            let new_re = r2 - i2 + c_re + p * z_prev_re;
+            let new_im = 2.0 * z_re * z_im + c_im + p * z_prev_im;
+
+            z_prev_re = z_re;
+            z_prev_im = z_im;
+            z_re = new_re;
+            z_im = new_im;
+
+            orbit_data.update(Complex64::new(z_re, z_im));
+        }
+
+        FractalResult::inside_set(max_iter)
+    }
 }
 
 // ============================================================================
@@ -843,15 +1192,54 @@ impl Fractal for Multibrot {
                 return i;
             }
 
-            // Use De Moivre's theorem: (r*e^(iθ))^power = r^power * e^(i*power*θ)
-            let angle = power * z_im.atan2(z_re);
-            let radius = (r2 + i2).powf(power / 2.0);
-
-            z_re = radius * angle.cos() + c_re;
-            z_im = radius * angle.sin() + c_im;
+            if (power - 2.0).abs() < 1e-10 {
+                let new_re = r2 - i2 + c_re;
+                let new_im = 2.0 * z_re * z_im + c_im;
+                z_re = new_re;
+                z_im = new_im;
+            } else {
+                let angle = power * z_im.atan2(z_re);
+                let radius = (r2 + i2).powf(power / 2.0);
+                z_re = radius * angle.cos() + c_re;
+                z_im = radius * angle.sin() + c_im;
+            }
         }
 
         max_iter
+    }
+
+    fn compute_full(&self, cx: f64, cy: f64, max_iter: u32) -> FractalResult {
+        let mut z_re: f64 = 0.0;
+        let mut z_im: f64 = 0.0;
+        let c_re = cx;
+        let c_im = cy;
+        let power = self.power;
+        let mut orbit_data = OrbitData::new();
+
+        for i in 0..max_iter {
+            let r2 = z_re * z_re;
+            let i2 = z_im * z_im;
+
+            if r2 + i2 > 4.0 {
+                return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
+            }
+
+            if (power - 2.0).abs() < 1e-10 {
+                let new_re = r2 - i2 + c_re;
+                let new_im = 2.0 * z_re * z_im + c_im;
+                z_re = new_re;
+                z_im = new_im;
+            } else {
+                let angle = power * z_im.atan2(z_re);
+                let radius = (r2 + i2).powf(power / 2.0);
+                z_re = radius * angle.cos() + c_re;
+                z_im = radius * angle.sin() + c_im;
+            }
+
+            orbit_data.update(Complex64::new(z_re, z_im));
+        }
+
+        FractalResult::inside_set(max_iter)
     }
 }
 
@@ -915,17 +1303,58 @@ impl Fractal for Spider {
                 return i;
             }
 
-            // Use De Moivre's theorem
-            let angle = power * z_im.atan2(z_re);
-            let radius = (r2 + i2).powf(power / 2.0);
-
-            // Alternate between +c and -c
             let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
-            z_re = radius * angle.cos() + sign * c_re;
-            z_im = radius * angle.sin() + sign * c_im;
+
+            if (power - 2.0).abs() < 1e-10 {
+                let new_re = r2 - i2 + sign * c_re;
+                let new_im = 2.0 * z_re * z_im + sign * c_im;
+                z_re = new_re;
+                z_im = new_im;
+            } else {
+                let angle = power * z_im.atan2(z_re);
+                let radius = (r2 + i2).powf(power / 2.0);
+                z_re = radius * angle.cos() + sign * c_re;
+                z_im = radius * angle.sin() + sign * c_im;
+            }
         }
 
         max_iter
+    }
+
+    fn compute_full(&self, cx: f64, cy: f64, max_iter: u32) -> FractalResult {
+        let mut z_re: f64 = 0.0;
+        let mut z_im: f64 = 0.0;
+        let c_re = cx;
+        let c_im = cy;
+        let power = self.power;
+        let mut orbit_data = OrbitData::new();
+
+        for i in 0..max_iter {
+            let r2 = z_re * z_re;
+            let i2 = z_im * z_im;
+
+            if r2 + i2 > 4.0 {
+                return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
+            }
+
+            let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
+
+            if (power - 2.0).abs() < 1e-10 {
+                let new_re = r2 - i2 + sign * c_re;
+                let new_im = 2.0 * z_re * z_im + sign * c_im;
+                z_re = new_re;
+                z_im = new_im;
+            } else {
+                let angle = power * z_im.atan2(z_re);
+                let radius = (r2 + i2).powf(power / 2.0);
+                z_re = radius * angle.cos() + sign * c_re;
+                z_im = radius * angle.sin() + sign * c_im;
+            }
+
+            orbit_data.update(Complex64::new(z_re, z_im));
+        }
+
+        FractalResult::inside_set(max_iter)
     }
 }
 
@@ -1003,14 +1432,11 @@ impl Fractal for OrbitTrap {
             let i2 = z_im * z_im;
 
             if r2 + i2 > 4.0 {
-                // Convert minimum distance to iteration count for coloring
-                // Closer to trap = higher iteration count (brighter)
                 let dist = min_distance_sq.sqrt();
                 let trap_value = (1.0 / (1.0 + dist * 10.0) * max_iter as f64) as u32;
                 return trap_value.min(max_iter - 1);
             }
 
-            // Track minimum distance to trap
             let dx = z_re - self.trap_x;
             let dy = z_im - self.trap_y;
             let dist_sq = dx * dx + dy * dy;
@@ -1018,15 +1444,50 @@ impl Fractal for OrbitTrap {
                 min_distance_sq = dist_sq;
             }
 
-            // Mandelbrot iteration: z^2 + c
             let new_re = r2 - i2 + c_re;
             let new_im = 2.0 * z_re * z_im + c_im;
             z_re = new_re;
             z_im = new_im;
         }
 
-        // Point is in set - return max_iter
         max_iter
+    }
+
+    fn compute_full(&self, cx: f64, cy: f64, max_iter: u32) -> FractalResult {
+        let mut z_re: f64 = 0.0;
+        let mut z_im: f64 = 0.0;
+        let c_re = cx;
+        let c_im = cy;
+        let mut orbit_data = OrbitData::new();
+        let mut min_distance_sq = f64::MAX;
+
+        for _i in 0..max_iter {
+            let r2 = z_re * z_re;
+            let i2 = z_im * z_im;
+
+            if r2 + i2 > 4.0 {
+                let dist = min_distance_sq.sqrt();
+                let trap_value = (1.0 / (1.0 + dist * 10.0) * max_iter as f64) as u32;
+                let iters = trap_value.min(max_iter - 1);
+                return FractalResult::escaped(iters, Complex64::new(z_re, z_im), orbit_data);
+            }
+
+            let dx = z_re - self.trap_x;
+            let dy = z_im - self.trap_y;
+            let dist_sq = dx * dx + dy * dy;
+            if dist_sq < min_distance_sq {
+                min_distance_sq = dist_sq;
+            }
+
+            let new_re = r2 - i2 + c_re;
+            let new_im = 2.0 * z_re * z_im + c_im;
+            z_re = new_re;
+            z_im = new_im;
+
+            orbit_data.update(Complex64::new(z_re, z_im));
+        }
+
+        FractalResult::inside_set(max_iter)
     }
 }
 
@@ -1092,58 +1553,78 @@ impl Fractal for PickoverStalk {
     }
 
     fn compute(&self, cx: f64, cy: f64, max_iter: u32) -> u32 {
-        // Following the pseudo-code: z starts at pixel coordinate (like Julia)
-        // c is also the pixel coordinate
         let c_re = cx;
         let c_im = cy;
-        let mut z_re = cx; // z starts at pixel coordinate, NOT 0
+        let mut z_re = cx;
         let mut z_im = cy;
 
-        let mut trap_distance = f64::MAX; // Keeps track of minimum distance to axes
+        let mut trap_distance = f64::MAX;
 
         for iteration in 0..max_iter {
             let r2 = z_re * z_re;
             let i2 = z_im * z_im;
 
-            // Check escape condition
             if r2 + i2 > 4.0 {
-                // Return iteration count modulated by stalk proximity
-                // Points closer to axes (smaller trap_distance) return higher values
-                // thickness parameter controls how "thick" the stalk appears
-                // Following pseudo-code: return trapDistance * color / dividend
-                // We map this to iteration space: smaller trap_distance = higher iteration count
-
-                // Normalize: 0.0 to 1.0 range based on thickness
                 let normalized = trap_distance / self.stalk_thickness;
-
-                // Invert so small distances give high values
                 let stalk_brightness = 1.0 / (1.0 + normalized * self.stalk_intensity);
-
-                // Mix with iteration count for color variation
                 let final_value = (stalk_brightness * iteration as f64) as u32;
-
                 return final_value.max(1);
             }
 
-            // Calculate distance to real and imaginary axes
-            let dist_to_real = z_im.abs(); // Distance to real axis (y=0)
-            let dist_to_imag = z_re.abs(); // Distance to imaginary axis (x=0)
+            let dist_to_real = z_im.abs();
+            let dist_to_imag = z_re.abs();
             let smallest_distance = dist_to_real.min(dist_to_imag);
 
-            // Update trap distance with smallest seen so far
             if smallest_distance < trap_distance {
                 trap_distance = smallest_distance;
             }
 
-            // Mandelbrot iteration: z = z^2 + c
             let new_re = r2 - i2 + c_re;
             let new_im = 2.0 * z_re * z_im + c_im;
             z_re = new_re;
             z_im = new_im;
         }
 
-        // Point is in set - return max_iter
         max_iter
+    }
+
+    fn compute_full(&self, cx: f64, cy: f64, max_iter: u32) -> FractalResult {
+        let c_re = cx;
+        let c_im = cy;
+        let mut z_re = cx;
+        let mut z_im = cy;
+        let mut orbit_data = OrbitData::new();
+        let mut trap_distance = f64::MAX;
+
+        for iteration in 0..max_iter {
+            let r2 = z_re * z_re;
+            let i2 = z_im * z_im;
+
+            if r2 + i2 > 4.0 {
+                let normalized = trap_distance / self.stalk_thickness;
+                let stalk_brightness = 1.0 / (1.0 + normalized * self.stalk_intensity);
+                let final_value = (stalk_brightness * iteration as f64) as u32;
+                let iters = final_value.max(1);
+                return FractalResult::escaped(iters, Complex64::new(z_re, z_im), orbit_data);
+            }
+
+            let dist_to_real = z_im.abs();
+            let dist_to_imag = z_re.abs();
+            let smallest_distance = dist_to_real.min(dist_to_imag);
+
+            if smallest_distance < trap_distance {
+                trap_distance = smallest_distance;
+            }
+
+            let new_re = r2 - i2 + c_re;
+            let new_im = 2.0 * z_re * z_im + c_im;
+            z_re = new_re;
+            z_im = new_im;
+
+            orbit_data.update(Complex64::new(z_re, z_im));
+        }
+
+        FractalResult::inside_set(max_iter)
     }
 }
 
