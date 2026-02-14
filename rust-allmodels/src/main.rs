@@ -1,5 +1,6 @@
 use eframe::egui;
 use image::{ImageBuffer, Rgb};
+use rayon;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -19,7 +20,7 @@ use command::{
 use fractal::{registry::FractalRegistry, Fractal, FractalType};
 use palette::PaletteType;
 use renderer::{RenderConfig, RenderEngine, RenderRegion};
-use ui::FractalControls;
+use ui::{FractalControls, RenderStatus};
 use viewport::Viewport;
 
 /// Application configuration for persistence
@@ -126,6 +127,7 @@ struct FractalApp {
     show_bookmark_dialog: bool,
     bookmark_name_input: String,
     minimap_enabled: bool,
+    export_scale: u32,
     // Rendering engine
     render_engine: RenderEngine,
     // Current render configuration
@@ -210,6 +212,7 @@ impl FractalApp {
             show_bookmark_dialog: false,
             bookmark_name_input: String::new(),
             minimap_enabled: false,
+            export_scale: 1,
             render_engine: RenderEngine::default(),
             render_config: None,
             partial_render_regions: Vec::new(),
@@ -818,7 +821,14 @@ impl eframe::App for FractalApp {
             .show(ctx, |ui| {
                 let prev_fractal = self.controls.fractal_type;
                 let mut changed = false;
-                self.controls.ui(ui, &mut self.fractal, &mut changed);
+                let render_status = RenderStatus::new(
+                    self.is_rendering || self.needs_render,
+                    self.render_progress,
+                    self.last_render_time,
+                    rayon::current_num_threads(),
+                );
+                self.controls
+                    .ui(ui, &mut self.fractal, &mut changed, &render_status);
 
                 if prev_fractal != self.controls.fractal_type {
                     self.fractal = self.create_fractal(self.controls.fractal_type);
@@ -869,34 +879,17 @@ impl eframe::App for FractalApp {
                     }
                 });
 
-                ui.horizontal(|ui| {
-                    if ui.button("Save (S)").clicked() {
-                        match self.save_image(1) {
-                            Ok(path) => {
-                                self.set_status(format!("Saved: {}", path.display()));
-                            }
-                            Err(e) => {
-                                self.set_status(format!("Error: {}", e));
-                            }
-                        }
-                    }
-                    if ui.button("Bookmark").clicked() {
-                        self.show_bookmark_dialog = true;
-                        self.bookmark_name_input.clear();
-                    }
-                });
-
                 let can_undo = self.get_command_history().can_undo();
                 let can_redo = self.get_command_history().can_redo();
                 ui.horizontal(|ui| {
                     if ui
-                        .add_enabled(can_undo, egui::Button::new("Undo"))
+                        .add_enabled(can_undo, egui::Button::new("Undo (^Z)"))
                         .clicked()
                     {
                         self.undo();
                     }
                     if ui
-                        .add_enabled(can_redo, egui::Button::new("Redo"))
+                        .add_enabled(can_redo, egui::Button::new("Redo (^Y)"))
                         .clicked()
                     {
                         self.redo();
@@ -904,26 +897,20 @@ impl eframe::App for FractalApp {
                 });
 
                 ui.separator();
-                ui.label("Export Resolution:");
                 ui.horizontal(|ui| {
-                    if ui.button("1x (Current)").clicked() {
-                        match self.save_image(1) {
-                            Ok(path) => self.set_status(format!("Saved: {}", path.display())),
+                    if ui.button("Save (S)").clicked() {
+                        match self.save_image(self.export_scale) {
+                            Ok(path) => self.set_status(format!(
+                                "Saved {}x: {}",
+                                self.export_scale,
+                                path.display()
+                            )),
                             Err(e) => self.set_status(format!("Error: {}", e)),
                         }
                     }
-                    if ui.button("2x").clicked() {
-                        match self.save_image(2) {
-                            Ok(path) => self.set_status(format!("Saved 2x: {}", path.display())),
-                            Err(e) => self.set_status(format!("Error: {}", e)),
-                        }
-                    }
-                    if ui.button("4x").clicked() {
-                        match self.save_image(4) {
-                            Ok(path) => self.set_status(format!("Saved 4x: {}", path.display())),
-                            Err(e) => self.set_status(format!("Error: {}", e)),
-                        }
-                    }
+                    ui.radio_value(&mut self.export_scale, 1, "1x");
+                    ui.radio_value(&mut self.export_scale, 2, "2x");
+                    ui.radio_value(&mut self.export_scale, 4, "4x");
                 });
 
                 ui.separator();
@@ -970,9 +957,21 @@ impl eframe::App for FractalApp {
                 }
 
                 // Bookmarks list
-                if !self.bookmarks.is_empty() {
-                    ui.separator();
+                ui.separator();
+                ui.horizontal(|ui| {
                     ui.label("Bookmarks:");
+                    if ui.button("Add").clicked() {
+                        self.show_bookmark_dialog = true;
+                        self.bookmark_name_input.clear();
+                    }
+                });
+
+                // Show bookmark status message if present
+                if let Some((msg, _)) = &self.status_message {
+                    ui.label(egui::RichText::new(msg).color(egui::Color32::YELLOW));
+                }
+
+                if !self.bookmarks.is_empty() {
                     egui::ScrollArea::vertical()
                         .max_height(150.0)
                         .show(ui, |ui| {
@@ -994,20 +993,12 @@ impl eframe::App for FractalApp {
                     ui.label("Release to apply zoom");
                 }
 
-                // Show status message if present
-                if let Some((msg, _)) = &self.status_message {
-                    ui.separator();
-                    ui.label(egui::RichText::new(msg).color(egui::Color32::YELLOW));
-                }
-
                 ui.separator();
                 let view = self.get_view();
                 ui.label(format!(
-                    "Center: ({:.6}, {:.6})",
-                    view.center_x, view.center_y
+                    "Center: ({:.6}, {:.6}) x {:.2e}",
+                    view.center_x, view.center_y, view.zoom
                 ));
-                ui.label(format!("Zoom: {:.2e}", view.zoom));
-                ui.label(format!("Iter: {}", view.max_iterations));
 
                 // Mouse coordinates display
                 if let Some((fx, fy)) = self.mouse_fractal_pos {
@@ -1015,21 +1006,10 @@ impl eframe::App for FractalApp {
                     ui.label(format!("Cursor: ({:.6}, {:.6})", fx, fy));
                 }
 
-                if self.is_rendering || self.needs_render {
-                    ui.separator();
-                    ui.label("Rendering...");
-                    ui.add(egui::ProgressBar::new(self.render_progress).desired_width(200.0));
-                }
-
-                // Show last render time
-                if let Some(render_time) = self.last_render_time {
-                    ui.separator();
-                    if render_time < 1.0 {
-                        ui.label(format!("Last render: {:.0}ms", render_time * 1000.0));
-                    } else {
-                        ui.label(format!("Last render: {:.2}s", render_time));
-                    }
-                }
+                ui.separator();
+                ui.label("Mouse:");
+                ui.label("Click + Drag: Select zoom region");
+                ui.label("Wheel: Zoom in/out at cursor");
 
                 ui.separator();
                 ui.label("Keyboard:");

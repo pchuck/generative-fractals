@@ -945,8 +945,8 @@ pub struct OrbitTrap {
 impl Default for OrbitTrap {
     fn default() -> Self {
         OrbitTrap {
-            trap_x: 0.0,
-            trap_y: 0.0,
+            trap_x: 0.1,
+            trap_y: 0.1,
         }
     }
 }
