@@ -12,6 +12,7 @@ pub struct AppState {
     pub max_iterations: u32,
     pub palette_type: PaletteType,
     pub palette_offset: f32,
+    pub color_processor_type: crate::color_pipeline::ColorProcessorType,
     pub fractal_params: HashMap<String, f64>,
 }
 
@@ -23,6 +24,7 @@ impl Default for AppState {
             max_iterations: 200,
             palette_type: PaletteType::Classic,
             palette_offset: 0.0,
+            color_processor_type: crate::color_pipeline::ColorProcessorType::default(),
             fractal_params: HashMap::new(),
         }
     }

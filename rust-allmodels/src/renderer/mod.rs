@@ -483,6 +483,7 @@ mod tests {
             zoom: 1.0,
             max_iterations: 100,
             fractal_params: HashMap::new(),
+            color_processor_type: crate::color_pipeline::ColorProcessorType::default(),
             palette_type: PaletteType::Classic,
         }
     }

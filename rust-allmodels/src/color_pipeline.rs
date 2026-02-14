@@ -1,7 +1,47 @@
 use eframe::egui::Color32;
 use num_complex::Complex64;
+use serde::{Deserialize, Serialize};
 
 use crate::palette::{get_color, PaletteType};
+
+/// Available color processor types
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ColorProcessorType {
+    #[default]
+    Palette,
+    Smooth,
+    OrbitTrapReal,
+    OrbitTrapImag,
+    OrbitTrapOrigin,
+}
+
+impl ColorProcessorType {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            ColorProcessorType::Palette => "Standard Palette",
+            ColorProcessorType::Smooth => "Smooth Coloring",
+            ColorProcessorType::OrbitTrapReal => "Orbit Trap (Real Axis)",
+            ColorProcessorType::OrbitTrapImag => "Orbit Trap (Imaginary Axis)",
+            ColorProcessorType::OrbitTrapOrigin => "Orbit Trap (Origin)",
+        }
+    }
+
+    pub fn create_processor(&self) -> Box<dyn ColorProcessor> {
+        match self {
+            ColorProcessorType::Palette => Box::new(PaletteProcessor),
+            ColorProcessorType::Smooth => Box::new(SmoothColoring::new(true)),
+            ColorProcessorType::OrbitTrapReal => {
+                Box::new(OrbitTrapProcessor::new(TrapType::RealAxis, 0.1))
+            }
+            ColorProcessorType::OrbitTrapImag => {
+                Box::new(OrbitTrapProcessor::new(TrapType::ImagAxis, 0.1))
+            }
+            ColorProcessorType::OrbitTrapOrigin => {
+                Box::new(OrbitTrapProcessor::new(TrapType::Origin, 0.5))
+            }
+        }
+    }
+}
 
 /// Context passed to color processors during rendering
 #[derive(Debug, Clone, Copy)]
@@ -326,6 +366,14 @@ impl Default for ColorPipeline {
     fn default() -> Self {
         Self {
             processor: Box::new(PaletteProcessor),
+        }
+    }
+}
+
+impl ColorPipeline {
+    pub fn from_type(processor_type: ColorProcessorType) -> Self {
+        Self {
+            processor: processor_type.create_processor(),
         }
     }
 }

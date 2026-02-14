@@ -97,6 +97,7 @@ pub struct FractalViewState {
     pub max_iterations: u32,
     pub fractal_params: HashMap<String, f64>,
     pub palette_type: PaletteType,
+    pub color_processor_type: color_pipeline::ColorProcessorType,
 }
 
 struct FractalApp {
@@ -161,6 +162,7 @@ impl FractalApp {
                         max_iterations: config.default_iterations,
                         fractal_params: HashMap::new(),
                         palette_type: config.default_palette,
+                        color_processor_type: color_pipeline::ColorProcessorType::default(),
                     },
                 );
             }
@@ -347,6 +349,7 @@ impl FractalApp {
             max_iterations: self.controls.max_iterations,
             palette_type: self.controls.palette_type,
             palette_offset: self.controls.palette_offset,
+            color_processor_type: self.controls.color_processor_type,
             fractal_params: self.get_view().fractal_params.clone(),
         }
     }
@@ -358,6 +361,7 @@ impl FractalApp {
         self.controls.pending_max_iterations = state.max_iterations;
         self.controls.palette_type = state.palette_type;
         self.controls.palette_offset = state.palette_offset;
+        self.controls.color_processor_type = state.color_processor_type;
 
         // Update the view for the current fractal
         let mut view = self.get_view();
@@ -366,6 +370,7 @@ impl FractalApp {
         view.zoom = state.viewport.zoom();
         view.max_iterations = state.max_iterations;
         view.palette_type = state.palette_type;
+        view.color_processor_type = state.color_processor_type;
         view.fractal_params = state.fractal_params.clone();
         self.set_view(view);
     }
@@ -477,6 +482,7 @@ impl FractalApp {
             max_iterations: current_max_iter,
             fractal_params: current_params,
             palette_type: current_palette,
+            color_processor_type: self.controls.color_processor_type,
         };
         self.set_view(default_view);
     }
@@ -491,6 +497,7 @@ impl FractalApp {
             max_iterations: 200,
             fractal_params: HashMap::new(),
             palette_type: PaletteType::Classic,
+            color_processor_type: color_pipeline::ColorProcessorType::default(),
         };
         self.set_view(default_view);
 
@@ -628,6 +635,7 @@ impl FractalApp {
                 max_iterations: bookmark.max_iterations,
                 fractal_params: HashMap::new(),
                 palette_type: bookmark.palette_type,
+                color_processor_type: color_pipeline::ColorProcessorType::default(),
             };
             self.set_view(view);
 
@@ -835,6 +843,7 @@ impl eframe::App for FractalApp {
                         view.max_iterations = self.controls.max_iterations;
                         view.fractal_params = self.controls.pending_fractal_params.clone();
                         view.palette_type = self.controls.palette_type;
+                        view.color_processor_type = self.controls.color_processor_type;
                     }
                     self.invalidate_cache();
                 }
@@ -1130,6 +1139,7 @@ impl eframe::App for FractalApp {
                             max_iterations: new_max_iter,
                             fractal_params: view.fractal_params.clone(),
                             palette_type: self.controls.palette_type,
+                            color_processor_type: self.controls.color_processor_type,
                         });
 
                         // Execute command for history
@@ -1371,7 +1381,9 @@ impl eframe::App for FractalApp {
                     max_iterations: max_iter,
                     palette_type: self.controls.palette_type,
                     palette_offset: self.controls.palette_offset,
-                    color_pipeline: color_pipeline::ColorPipeline::default(),
+                    color_pipeline: color_pipeline::ColorPipeline::from_type(
+                        view.color_processor_type,
+                    ),
                 };
 
                 self.render_engine.start_render(&config);

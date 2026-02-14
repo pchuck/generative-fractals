@@ -1,12 +1,14 @@
 use eframe::egui;
 use std::collections::HashMap;
 
+use crate::color_pipeline::ColorProcessorType;
 use crate::fractal::{Fractal, FractalType};
 use crate::palette::PaletteType;
 
 pub struct FractalControls {
     pub fractal_type: FractalType,
     pub palette_type: PaletteType,
+    pub color_processor_type: ColorProcessorType,
     pub max_iterations: u32,
     pub palette_offset: f32,
     pub pending_max_iterations: u32,
@@ -19,6 +21,7 @@ impl Default for FractalControls {
         FractalControls {
             fractal_type: FractalType::Mandelbrot,
             palette_type: PaletteType::Classic,
+            color_processor_type: ColorProcessorType::Palette,
             max_iterations: 200,
             palette_offset: 0.0,
             pending_max_iterations: 200,
@@ -103,6 +106,43 @@ impl FractalControls {
         if palette_changed {
             self.pending_palette_offset = self.palette_offset;
         }
+
+        ui.separator();
+        ui.label("Color Processor:");
+        let prev_processor = self.color_processor_type;
+        egui::ComboBox::from_id_salt("color_processor")
+            .selected_text(self.color_processor_type.display_name())
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut self.color_processor_type,
+                    ColorProcessorType::Palette,
+                    ColorProcessorType::Palette.display_name(),
+                );
+                ui.selectable_value(
+                    &mut self.color_processor_type,
+                    ColorProcessorType::Smooth,
+                    ColorProcessorType::Smooth.display_name(),
+                );
+                ui.selectable_value(
+                    &mut self.color_processor_type,
+                    ColorProcessorType::OrbitTrapReal,
+                    ColorProcessorType::OrbitTrapReal.display_name(),
+                );
+                ui.selectable_value(
+                    &mut self.color_processor_type,
+                    ColorProcessorType::OrbitTrapImag,
+                    ColorProcessorType::OrbitTrapImag.display_name(),
+                );
+                ui.selectable_value(
+                    &mut self.color_processor_type,
+                    ColorProcessorType::OrbitTrapOrigin,
+                    ColorProcessorType::OrbitTrapOrigin.display_name(),
+                );
+            });
+        if prev_processor != self.color_processor_type {
+            *changed = true;
+        }
+
         if self.palette_type == PaletteType::Psychedelic {
             ui.label("Color Offset:");
             let response = ui
