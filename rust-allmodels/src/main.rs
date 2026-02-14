@@ -20,6 +20,29 @@ use renderer::{RenderConfig, RenderEngine, RenderRegion};
 use ui::{FractalControls, RenderStatus};
 use viewport::Viewport;
 
+// Application-wide constants
+const DEFAULT_WINDOW_WIDTH: f32 = 1200.0;
+const DEFAULT_WINDOW_HEIGHT: f32 = 800.0;
+const DEFAULT_ITERATIONS: u32 = 200;
+const MAX_ITERATIONS_CAP: u32 = 2000;
+const ADAPTIVE_ITER_COEFFICIENT: f64 = 50.0;
+const UNDO_HISTORY_CAPACITY: usize = 50;
+const STATUS_TIMEOUT_SECS: f64 = 3.0;
+const DRAG_THRESHOLD_PX: f32 = 10.0;
+const RENDER_DELAY_FRAMES: u32 = 2;
+const MINIMAP_SIZE: usize = 150;
+const MINIMAP_MAX_ITER: u32 = 50;
+const MINIMAP_MAP_RANGE: f64 = 4.0;
+const CONTROL_PANEL_WIDTH: f32 = 280.0;
+const BOOKMARK_SCROLL_HEIGHT: f32 = 150.0;
+const ZOOM_KEYBOARD_FACTOR: f64 = 1.5;
+const PAN_AMOUNT_BASE: f64 = 0.5;
+const SCROLL_ZOOM_SENSITIVITY: f64 = 0.01;
+const SCROLL_DEADZONE: f32 = 0.1;
+const ABOUT_IMAGE_PATH: &str = "images/mandelbrot_grayscale_904x784.png";
+const ABOUT_IMAGE_DISPLAY_WIDTH: f32 = 452.0;
+const ABOUT_IMAGE_DISPLAY_HEIGHT: f32 = 392.0;
+
 /// Application configuration for persistence
 #[derive(Serialize, Deserialize, Clone)]
 struct AppConfig {
@@ -36,9 +59,9 @@ struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         AppConfig {
-            window_width: 1200.0,
-            window_height: 800.0,
-            default_iterations: 200,
+            window_width: DEFAULT_WINDOW_WIDTH,
+            window_height: DEFAULT_WINDOW_HEIGHT,
+            default_iterations: DEFAULT_ITERATIONS,
             default_fractal: FractalType::Mandelbrot,
             default_palette: PaletteType::Classic,
             supersampling_enabled: false,
@@ -102,30 +125,77 @@ pub struct FractalViewState {
     pub color_processor_type: color_pipeline::ColorProcessorType,
 }
 
+/// State related to fractal rendering (engine, config, progress, caches)
+struct RenderState {
+    engine: RenderEngine,
+    config: Option<RenderConfig>,
+    needs_render: bool,
+    is_rendering: bool,
+    render_progress: f32,
+    render_start_time: Option<Instant>,
+    last_render_time: Option<f64>,
+    render_chunk_start: u32,
+    /// Partial render regions for pan optimization
+    partial_render_regions: Vec<RenderRegion>,
+    current_region_index: usize,
+    /// Delay rendering by N frames (for zoom preview)
+    render_delay: u32,
+    /// Cached fractal image pixels
+    cached_image: Option<egui::ColorImage>,
+    /// GPU texture handle (only recreated when dirty)
+    cached_texture: Option<egui::TextureHandle>,
+    texture_dirty: bool,
+    /// Previous image for zoom preview blitting
+    prev_image: Option<egui::ColorImage>,
+    cached_width: u32,
+    cached_height: u32,
+    supersampling_enabled: bool,
+    adaptive_iterations: bool,
+}
+
+impl Default for RenderState {
+    fn default() -> Self {
+        Self {
+            engine: RenderEngine::default(),
+            config: None,
+            needs_render: true,
+            is_rendering: false,
+            render_progress: 0.0,
+            render_start_time: None,
+            last_render_time: None,
+            render_chunk_start: 0,
+            partial_render_regions: Vec::new(),
+            current_region_index: 0,
+            render_delay: 0,
+            cached_image: None,
+            cached_texture: None,
+            texture_dirty: false,
+            prev_image: None,
+            cached_width: 0,
+            cached_height: 0,
+            supersampling_enabled: false,
+            adaptive_iterations: false,
+        }
+    }
+}
+
+/// State related to mouse/keyboard interaction
+#[derive(Default)]
+struct InteractionState {
+    drag_start: Option<egui::Pos2>,
+    drag_current: Option<egui::Pos2>,
+    zoom_preview: Option<ZoomPreview>,
+    mouse_fractal_pos: Option<(f64, f64)>,
+    status_message: Option<(String, Instant)>,
+}
+
 struct FractalApp {
     fractal: Box<dyn Fractal>,
     controls: FractalControls,
     views: HashMap<FractalType, FractalViewState>,
-    drag_start: Option<egui::Pos2>,
-    drag_current: Option<egui::Pos2>,
-    needs_render: bool,
-    cached_fractal_image: Option<egui::ColorImage>,
-    cached_texture: Option<egui::TextureHandle>,
-    texture_dirty: bool,
-    cached_width: u32,
-    cached_height: u32,
-    prev_fractal_image: Option<egui::ColorImage>,
-    render_delay: u32,
-    zoom_preview: Option<ZoomPreview>,
-    render_progress: f32,
-    is_rendering: bool,
-    render_start_time: Option<Instant>,
-    last_render_time: Option<f64>, // in seconds
-    status_message: Option<(String, Instant)>,
-    mouse_fractal_pos: Option<(f64, f64)>,
     command_histories: HashMap<FractalType, CommandHistory>,
-    supersampling_enabled: bool,
-    adaptive_iterations: bool,
+    render: RenderState,
+    interaction: InteractionState,
     bookmarks: Vec<Bookmark>,
     show_bookmark_dialog: bool,
     bookmark_name_input: String,
@@ -135,18 +205,10 @@ struct FractalApp {
     export_scale: u32,
     show_about_dialog: bool,
     cached_about_texture: Option<egui::TextureHandle>,
-    // Rendering engine
-    render_engine: RenderEngine,
-    // Current render configuration
-    render_config: Option<RenderConfig>,
-    // Partial render regions for pan optimization
-    partial_render_regions: Vec<RenderRegion>,
-    current_region_index: usize,
-    render_chunk_start: u32,
-    // Fractal registry for creating fractals
     fractal_registry: FractalRegistry,
-    // Viewport for coordinate transformations
     viewport: Viewport,
+    actual_window_width: f32,
+    actual_window_height: f32,
 }
 
 struct ZoomPreview {
@@ -202,34 +264,23 @@ impl FractalApp {
             .create(config.default_fractal)
             .expect("Default fractal should be registered");
 
+        let render = RenderState {
+            supersampling_enabled: config.supersampling_enabled,
+            adaptive_iterations: config.adaptive_iterations,
+            ..Default::default()
+        };
+
         FractalApp {
             fractal,
             controls,
             views,
-            drag_start: None,
-            drag_current: None,
-            needs_render: true,
-            cached_fractal_image: None,
-            cached_texture: None,
-            texture_dirty: false,
-            cached_width: 0,
-            cached_height: 0,
-            prev_fractal_image: None,
-            render_delay: 0,
-            zoom_preview: None,
-            render_progress: 0.0,
-            is_rendering: false,
-            render_start_time: None,
-            last_render_time: None,
-            status_message: None,
-            mouse_fractal_pos: None,
             command_histories: registry
                 .all_types()
                 .into_iter()
-                .map(|ft| (ft, CommandHistory::new(50)))
+                .map(|ft| (ft, CommandHistory::new(UNDO_HISTORY_CAPACITY)))
                 .collect(),
-            supersampling_enabled: config.supersampling_enabled,
-            adaptive_iterations: config.adaptive_iterations,
+            render,
+            interaction: InteractionState::default(),
             bookmarks: config.bookmarks.clone(),
             show_bookmark_dialog: false,
             bookmark_name_input: String::new(),
@@ -239,17 +290,14 @@ impl FractalApp {
             export_scale: 1,
             show_about_dialog: false,
             cached_about_texture: None,
-            render_engine: RenderEngine::default(),
-            render_config: None,
-            partial_render_regions: Vec::new(),
-            current_region_index: 0,
-            render_chunk_start: 0,
             fractal_registry: registry,
             viewport: Viewport::new(
                 config.default_fractal.default_center().0,
                 config.default_fractal.default_center().1,
                 1.0,
             ),
+            actual_window_width: config.window_width,
+            actual_window_height: config.window_height,
         }
     }
 
@@ -270,46 +318,37 @@ impl FractalApp {
     fn get_command_history(&mut self) -> &mut CommandHistory {
         self.command_histories
             .entry(self.controls.fractal_type)
-            .or_insert_with(|| CommandHistory::new(50))
+            .or_insert_with(|| CommandHistory::new(UNDO_HISTORY_CAPACITY))
     }
 
     fn set_view(&mut self, view: FractalViewState) {
         self.views.insert(self.controls.fractal_type, view.clone());
-        // Sync viewport with the new view
         self.viewport = Viewport::from_view(
             view.center_x,
             view.center_y,
             view.zoom,
-            self.cached_width.max(1),
-            self.cached_height.max(1),
+            self.render.cached_width.max(1),
+            self.render.cached_height.max(1),
         );
     }
 
-    /// Update viewport dimensions (call when window resizes)
     fn update_viewport_dimensions(&mut self, width: u32, height: u32) {
         self.viewport.set_dimensions(width, height);
     }
 
-    /// Invalidate the render cache and request a full re-render.
-    /// Clears any partial render regions since we're doing a full render.
     fn invalidate_cache(&mut self) {
-        self.needs_render = true;
-        self.texture_dirty = true;
+        self.render.needs_render = true;
+        self.render.texture_dirty = true;
         self.minimap_dirty = true;
-        self.partial_render_regions.clear();
-        self.current_region_index = 0;
+        self.render.partial_render_regions.clear();
+        self.render.current_region_index = 0;
     }
 
     fn calculate_adaptive_iterations(&self, zoom: f64) -> u32 {
-        // Base iterations + additional iterations based on zoom level
-        // Formula: base + 50 * log2(zoom)
-        // At zoom 1: base iterations
-        // At zoom 10: base + ~166 iterations
-        // At zoom 100: base + ~332 iterations
         let base_iter = self.controls.max_iterations;
         let zoom_factor = if zoom > 1.0 { zoom.log2() } else { 0.0 };
-        let additional = (50.0 * zoom_factor) as u32;
-        (base_iter + additional).min(2000) // Cap at 2000
+        let additional = (ADAPTIVE_ITER_COEFFICIENT * zoom_factor) as u32;
+        (base_iter + additional).min(MAX_ITERATIONS_CAP)
     }
 
     fn execute_view_command(&mut self, old_view: &FractalViewState, new_view: &FractalViewState) {
@@ -348,7 +387,8 @@ impl FractalApp {
 
     fn save_image(&self, scale_factor: u32) -> Result<PathBuf, String> {
         let image = self
-            .cached_fractal_image
+            .render
+            .cached_image
             .as_ref()
             .ok_or("No image to save - wait for render to complete")?;
 
@@ -412,13 +452,13 @@ impl FractalApp {
         height: u32,
     ) -> Result<(), String> {
         let view = self.get_view();
-        let max_iter = if self.adaptive_iterations {
+        let max_iter = if self.render.adaptive_iterations {
             self.calculate_adaptive_iterations(view.zoom)
         } else {
             self.controls.max_iterations
         };
 
-        let pixels = self.render_engine.render_high_res(
+        let pixels = self.render.engine.render_high_res(
             self.fractal.as_ref(),
             &view,
             width,
@@ -466,7 +506,7 @@ impl FractalApp {
             center_x,
             center_y,
             zoom: 1.0,
-            max_iterations: 200,
+            max_iterations: DEFAULT_ITERATIONS,
             fractal_params: HashMap::new(),
             palette_type: PaletteType::Classic,
             color_processor_type: color_pipeline::ColorProcessorType::default(),
@@ -474,8 +514,8 @@ impl FractalApp {
         self.set_view(default_view);
 
         // Reset controls
-        self.controls.max_iterations = 200;
-        self.controls.pending_max_iterations = 200;
+        self.controls.max_iterations = DEFAULT_ITERATIONS;
+        self.controls.pending_max_iterations = DEFAULT_ITERATIONS;
         self.controls.palette_type = PaletteType::Classic;
         self.controls.pending_palette_offset = 0.0;
         self.controls.palette_offset = 0.0;
@@ -515,7 +555,7 @@ impl FractalApp {
         view.center_x = focus.re - (focus.re - old_view.center_x) * ratio;
         view.center_y = focus.im - (focus.im - old_view.center_y) * ratio;
 
-        if self.adaptive_iterations {
+        if self.render.adaptive_iterations {
             let new_iter = self.calculate_adaptive_iterations(view.zoom);
             view.max_iterations = new_iter;
             self.controls.max_iterations = new_iter;
@@ -532,8 +572,7 @@ impl FractalApp {
         let mut view = old_view.clone();
         view.zoom *= factor;
 
-        // If adaptive iterations is enabled, update max_iterations
-        if self.adaptive_iterations {
+        if self.render.adaptive_iterations {
             let new_iter = self.calculate_adaptive_iterations(view.zoom);
             view.max_iterations = new_iter;
             self.controls.max_iterations = new_iter;
@@ -551,7 +590,7 @@ impl FractalApp {
     fn pan_view(&mut self, dx: f64, dy: f64) {
         let old_view = self.get_view();
         let mut view = old_view.clone();
-        let pan_amount = 0.5 / view.zoom;
+        let pan_amount = PAN_AMOUNT_BASE / view.zoom;
         view.center_x += dx * pan_amount;
         view.center_y += dy * pan_amount;
         self.set_view(view.clone());
@@ -560,20 +599,21 @@ impl FractalApp {
         self.execute_view_command(&old_view, &view);
 
         // Try to optimize pan by shifting existing pixels
-        if let Some(ref mut cached) = self.cached_fractal_image {
+        if let Some(ref mut cached) = self.render.cached_image {
             let regions = self
-                .render_engine
+                .render
+                .engine
                 .calculate_pan_regions(cached, dx, dy, view.zoom);
 
             if !regions.is_empty() {
-                self.partial_render_regions = regions;
-                self.current_region_index = 0;
-                self.needs_render = true;
+                self.render.partial_render_regions = regions;
+                self.render.current_region_index = 0;
+                self.render.needs_render = true;
                 return;
             }
         }
 
-        self.needs_render = true;
+        self.render.needs_render = true;
     }
 
     fn undo(&mut self) {
@@ -653,13 +693,13 @@ impl FractalApp {
     }
 
     fn set_status(&mut self, message: String) {
-        self.status_message = Some((message, Instant::now()));
+        self.interaction.status_message = Some((message, Instant::now()));
     }
 
     fn check_status_timeout(&mut self) {
-        if let Some((_, timestamp)) = self.status_message {
-            if timestamp.elapsed().as_secs_f64() > 3.0 {
-                self.status_message = None;
+        if let Some((_, timestamp)) = self.interaction.status_message {
+            if timestamp.elapsed().as_secs_f64() > STATUS_TIMEOUT_SECS {
+                self.interaction.status_message = None;
             }
         }
     }
@@ -673,9 +713,9 @@ impl FractalApp {
 
         if x < width && y < height {
             let world = self.viewport.screen_to_world(x, y, width, height);
-            self.mouse_fractal_pos = Some((world.re, world.im));
+            self.interaction.mouse_fractal_pos = Some((world.re, world.im));
         } else {
-            self.mouse_fractal_pos = None;
+            self.interaction.mouse_fractal_pos = None;
         }
     }
 
@@ -690,10 +730,10 @@ impl FractalApp {
             return;
         }
 
-        let minimap_size = 150;
+        let minimap_size = MINIMAP_SIZE;
         let mut pixels = vec![egui::Color32::BLACK; minimap_size * minimap_size];
 
-        let max_iter = 50; // Low quality for speed
+        let max_iter = MINIMAP_MAX_ITER;
 
         let minimap_viewport = Viewport::from_view(
             self.controls.fractal_type.default_center().0,
@@ -729,7 +769,7 @@ impl FractalApp {
         let view_width = 4.0 / view_zoom;
         let view_height = view_width;
 
-        let map_range = 4.0;
+        let map_range = MINIMAP_MAP_RANGE;
         let rel_x = (view_center_x - default_center.0 + map_range / 2.0) / map_range;
         let rel_y = (view_center_y - default_center.1 + map_range / 2.0) / map_range;
 
@@ -765,15 +805,23 @@ impl eframe::App for FractalApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.check_status_timeout();
 
+        // Track actual window size for saving on exit
+        ctx.input(|i| {
+            if let Some(size) = i.viewport().inner_rect {
+                self.actual_window_width = size.width();
+                self.actual_window_height = size.height();
+            }
+        });
+
         // Handle keyboard input (disable when bookmark dialog is open)
         if !self.show_bookmark_dialog {
             ctx.input(|i| {
                 // Zoom controls: +/- keys
                 if i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals) {
-                    self.zoom_view(1.5);
+                    self.zoom_view(ZOOM_KEYBOARD_FACTOR);
                 }
                 if i.key_pressed(egui::Key::Minus) {
-                    self.zoom_view(1.0 / 1.5);
+                    self.zoom_view(1.0 / ZOOM_KEYBOARD_FACTOR);
                 }
 
                 // Pan controls: arrow keys
@@ -819,14 +867,14 @@ impl eframe::App for FractalApp {
         }
 
         egui::SidePanel::left("controls")
-            .default_width(280.0)
+            .default_width(CONTROL_PANEL_WIDTH)
             .show(ctx, |ui| {
                 let prev_fractal = self.controls.fractal_type;
                 let mut changed = false;
                 let render_status = RenderStatus::new(
-                    self.is_rendering || self.needs_render,
-                    self.render_progress,
-                    self.last_render_time,
+                    self.render.is_rendering || self.render.needs_render,
+                    self.render.render_progress,
+                    self.render.last_render_time,
                     rayon::current_num_threads(),
                 );
                 self.controls
@@ -840,6 +888,7 @@ impl eframe::App for FractalApp {
                         self.controls.pending_max_iterations = view.max_iterations;
                         self.controls.pending_fractal_params = view.fractal_params.clone();
                         self.controls.palette_type = view.palette_type;
+                        self.controls.color_processor_type = view.color_processor_type;
                         self.controls.pending_palette_offset = self.controls.palette_offset;
                         for (name, value) in &view.fractal_params {
                             self.fractal.set_parameter(name, *value);
@@ -914,18 +963,18 @@ impl eframe::App for FractalApp {
                 ui.separator();
 
                 // Settings toggles
-                let prev_supersampling = self.supersampling_enabled;
-                ui.checkbox(&mut self.supersampling_enabled, "Supersampling (2x)");
-                if self.supersampling_enabled != prev_supersampling {
+                let prev_supersampling = self.render.supersampling_enabled;
+                ui.checkbox(&mut self.render.supersampling_enabled, "Supersampling (2x)");
+                if self.render.supersampling_enabled != prev_supersampling {
                     self.invalidate_cache();
                 }
 
-                let prev_adaptive = self.adaptive_iterations;
-                ui.checkbox(&mut self.adaptive_iterations, "Adaptive Iterations");
-                if self.adaptive_iterations != prev_adaptive {
+                let prev_adaptive = self.render.adaptive_iterations;
+                ui.checkbox(&mut self.render.adaptive_iterations, "Adaptive Iterations");
+                if self.render.adaptive_iterations != prev_adaptive {
                     self.invalidate_cache();
                 }
-                if self.adaptive_iterations {
+                if self.render.adaptive_iterations {
                     ui.label(format!(
                         "Current: {}",
                         self.calculate_adaptive_iterations(self.get_view().zoom)
@@ -965,7 +1014,7 @@ impl eframe::App for FractalApp {
                 });
 
                 // Show bookmark status message if present
-                if let Some((msg, _)) = &self.status_message {
+                if let Some((msg, _)) = &self.interaction.status_message {
                     ui.label(egui::RichText::new(msg).color(egui::Color32::YELLOW));
                 }
 
@@ -973,7 +1022,7 @@ impl eframe::App for FractalApp {
                     let mut load_index = None;
                     let mut delete_index = None;
                     egui::ScrollArea::vertical()
-                        .max_height(150.0)
+                        .max_height(BOOKMARK_SCROLL_HEIGHT)
                         .show(ui, |ui| {
                             for i in 0..self.bookmarks.len() {
                                 ui.horizontal(|ui| {
@@ -994,7 +1043,7 @@ impl eframe::App for FractalApp {
                     }
                 }
 
-                if self.drag_start.is_some() {
+                if self.interaction.drag_start.is_some() {
                     ui.separator();
                     ui.label("Release to apply zoom");
                 }
@@ -1007,7 +1056,7 @@ impl eframe::App for FractalApp {
                 ));
 
                 // Mouse coordinates display
-                if let Some((fx, fy)) = self.mouse_fractal_pos {
+                if let Some((fx, fy)) = self.interaction.mouse_fractal_pos {
                     ui.separator();
                     ui.label(format!("Cursor: ({:.6}, {:.6})", fx, fy));
                 }
@@ -1037,7 +1086,7 @@ impl eframe::App for FractalApp {
         if self.show_about_dialog {
             // Load about image once and cache it
             if self.cached_about_texture.is_none() {
-                let image_path = "images/mandelbrot_grayscale_904x784.png";
+                let image_path = ABOUT_IMAGE_PATH;
                 if let Ok(image_data) = std::fs::read(image_path) {
                     if let Ok(image) = image::load_from_memory(&image_data) {
                         let rgba = image.to_rgba8();
@@ -1061,7 +1110,10 @@ impl eframe::App for FractalApp {
                 .resizable(false)
                 .show(ctx, |ui| {
                     if let Some(ref texture) = self.cached_about_texture {
-                        ui.image((texture.id(), egui::vec2(452.0, 392.0)));
+                        ui.image((
+                            texture.id(),
+                            egui::vec2(ABOUT_IMAGE_DISPLAY_WIDTH, ABOUT_IMAGE_DISPLAY_HEIGHT),
+                        ));
                     } else {
                         ui.label("Image not found");
                     }
@@ -1085,7 +1137,7 @@ impl eframe::App for FractalApp {
             }
 
             // Update viewport dimensions if changed
-            if width != self.cached_width || height != self.cached_height {
+            if width != self.render.cached_width || height != self.render.cached_height {
                 self.update_viewport_dimensions(width, height);
             }
 
@@ -1101,21 +1153,21 @@ impl eframe::App for FractalApp {
             if let Some(pos) = pointer_pos {
                 self.update_mouse_position(pos, &rect);
             } else {
-                self.mouse_fractal_pos = None;
+                self.interaction.mouse_fractal_pos = None;
             }
 
             // Scroll-wheel zoom at cursor position
             if response.hovered() {
                 let scroll_delta = ctx.input(|i| i.smooth_scroll_delta.y);
-                if scroll_delta.abs() > 0.1 {
+                if scroll_delta.abs() > SCROLL_DEADZONE {
                     if let Some(pos) = pointer_pos {
                         let sx = (pos.x - rect.min.x) as u32;
                         let sy = (pos.y - rect.min.y) as u32;
                         if sx < width && sy < height {
                             let factor = if scroll_delta > 0.0 {
-                                1.0 + scroll_delta as f64 * 0.01
+                                1.0 + scroll_delta as f64 * SCROLL_ZOOM_SENSITIVITY
                             } else {
-                                1.0 / (1.0 + (-scroll_delta) as f64 * 0.01)
+                                1.0 / (1.0 + (-scroll_delta) as f64 * SCROLL_ZOOM_SENSITIVITY)
                             };
                             self.zoom_at_point(factor, sx, sy, width, height);
                         }
@@ -1124,32 +1176,34 @@ impl eframe::App for FractalApp {
             }
 
             if response.drag_started() {
-                self.drag_start = pointer_pos;
-                self.drag_current = pointer_pos;
-                self.zoom_preview = None;
+                self.interaction.drag_start = pointer_pos;
+                self.interaction.drag_current = pointer_pos;
+                self.interaction.zoom_preview = None;
             }
 
             if response.dragged() {
                 if let Some(pos) = pointer_pos {
-                    self.drag_current = Some(pos);
+                    self.interaction.drag_current = Some(pos);
                 }
                 ctx.request_repaint();
             }
 
             if response.drag_stopped() {
-                if let (Some(start), Some(end)) = (self.drag_start, self.drag_current) {
+                if let (Some(start), Some(end)) =
+                    (self.interaction.drag_start, self.interaction.drag_current)
+                {
                     let dx = (end.x - start.x).abs();
                     let dy = (end.y - start.y).abs();
 
-                    if dx > 10.0 || dy > 10.0 {
+                    if dx > DRAG_THRESHOLD_PX || dy > DRAG_THRESHOLD_PX {
                         let min_x = start.x.min(end.x) - rect.min.x;
                         let max_x = start.x.max(end.x) - rect.min.x;
                         let min_y = start.y.min(end.y) - rect.min.y;
                         let max_y = start.y.max(end.y) - rect.min.y;
 
-                        self.prev_fractal_image = self.cached_fractal_image.clone();
+                        self.render.prev_image = self.render.cached_image.clone();
 
-                        self.zoom_preview = Some(ZoomPreview {
+                        self.interaction.zoom_preview = Some(ZoomPreview {
                             sel_min: egui::pos2(min_x, min_y),
                             sel_max: egui::pos2(max_x, max_y),
                         });
@@ -1176,7 +1230,7 @@ impl eframe::App for FractalApp {
                         let new_zoom = view.zoom * (height as f64 / sel_height_px as f64);
 
                         // Calculate adaptive iterations if enabled
-                        let new_max_iter = if self.adaptive_iterations {
+                        let new_max_iter = if self.render.adaptive_iterations {
                             self.calculate_adaptive_iterations(new_zoom)
                         } else {
                             self.controls.max_iterations
@@ -1199,44 +1253,44 @@ impl eframe::App for FractalApp {
                         self.execute_view_command(&old_view, &new_view);
 
                         // Update controls to reflect new iteration count
-                        if self.adaptive_iterations {
+                        if self.render.adaptive_iterations {
                             self.controls.max_iterations = new_max_iter;
                             self.controls.pending_max_iterations = new_max_iter;
                         }
 
-                        self.render_delay = 2;
+                        self.render.render_delay = RENDER_DELAY_FRAMES;
                     }
                 }
 
-                self.drag_start = None;
-                self.drag_current = None;
+                self.interaction.drag_start = None;
+                self.interaction.drag_current = None;
                 ctx.request_repaint();
             }
 
             // Initial render check (pause when bookmark dialog is open)
             if !self.show_bookmark_dialog {
-                if self.cached_width == 0 || self.cached_height == 0 {
+                if self.render.cached_width == 0 || self.render.cached_height == 0 {
                     self.invalidate_cache();
-                } else if self.render_delay > 0 {
-                    self.render_delay -= 1;
-                    if self.render_delay == 0 {
+                } else if self.render.render_delay > 0 {
+                    self.render.render_delay -= 1;
+                    if self.render.render_delay == 0 {
                         self.invalidate_cache();
                     }
                 }
             }
 
             // Main fractal display - update texture only when image changes
-            if self.texture_dirty {
-                if let Some(ref image) = self.cached_fractal_image {
-                    self.cached_texture = Some(ctx.load_texture(
+            if self.render.texture_dirty {
+                if let Some(ref image) = self.render.cached_image {
+                    self.render.cached_texture = Some(ctx.load_texture(
                         "fractal",
                         image.clone(),
                         egui::TextureOptions::default(),
                     ));
-                    self.texture_dirty = false;
+                    self.render.texture_dirty = false;
                 }
             }
-            if let Some(ref texture) = self.cached_texture {
+            if let Some(ref texture) = self.render.cached_texture {
                 ui.put(
                     egui::Rect::from_min_size(rect.min, rect.size()),
                     egui::Image::new((texture.id(), rect.size())).uv(egui::Rect::from_min_max(
@@ -1250,7 +1304,7 @@ impl eframe::App for FractalApp {
             self.render_minimap(ctx);
             let minimap_rect = if self.minimap_enabled {
                 if let Some(ref minimap_texture) = self.cached_minimap_texture {
-                    let minimap_size = 150.0;
+                    let minimap_size = MINIMAP_SIZE as f32;
                     let minimap_rect = egui::Rect::from_min_size(
                         egui::pos2(rect.max.x - minimap_size - 10.0, rect.min.y + 10.0),
                         egui::vec2(minimap_size, minimap_size),
@@ -1270,8 +1324,8 @@ impl eframe::App for FractalApp {
             let painter = ui.painter();
 
             // Draw zoom preview if available
-            if let Some(ref preview) = self.zoom_preview {
-                if let Some(ref image) = self.prev_fractal_image {
+            if let Some(ref preview) = self.interaction.zoom_preview {
+                if let Some(ref image) = self.render.prev_image {
                     let texture = ctx.load_texture(
                         "fractal_preview",
                         image.clone(),
@@ -1295,8 +1349,10 @@ impl eframe::App for FractalApp {
             }
 
             // Draw selection rectangle outline
-            if self.zoom_preview.is_none() {
-                if let (Some(start), Some(end)) = (self.drag_start, self.drag_current) {
+            if self.interaction.zoom_preview.is_none() {
+                if let (Some(start), Some(end)) =
+                    (self.interaction.drag_start, self.interaction.drag_current)
+                {
                     let sel_rect = egui::Rect::from_two_pos(start, end);
                     painter.rect_stroke(sel_rect, 1.0, egui::Stroke::new(2.0, egui::Color32::BLUE));
                 }
@@ -1312,24 +1368,27 @@ impl eframe::App for FractalApp {
             }
 
             // Rendering logic using the new RenderEngine
-            if self.is_rendering {
-                if let Some(ref config) = self.render_config.clone() {
-                    if !self.partial_render_regions.is_empty() {
+            if self.render.is_rendering {
+                if let Some(ref config) = self.render.config.clone() {
+                    if !self.render.partial_render_regions.is_empty() {
                         // Partial rendering for pan optimization
-                        if self.current_region_index < self.partial_render_regions.len() {
-                            let region = &self.partial_render_regions[self.current_region_index];
+                        if self.render.current_region_index
+                            < self.render.partial_render_regions.len()
+                        {
+                            let region = &self.render.partial_render_regions
+                                [self.render.current_region_index];
                             let chunk_size = ((region.height as f64 / 10.0).ceil() as u32).max(1);
 
-                            if let Some(chunk_result) = self.render_engine.render_region(
+                            if let Some(chunk_result) = self.render.engine.render_region(
                                 region,
                                 self.fractal.as_ref(),
                                 &self.get_view(),
                                 config,
-                                self.render_chunk_start,
+                                self.render.render_chunk_start,
                                 chunk_size,
                             ) {
                                 // Update cached image with rendered pixels
-                                if let Some(ref mut cached) = self.cached_fractal_image {
+                                if let Some(ref mut cached) = self.render.cached_image {
                                     for dy in 0..chunk_result.height {
                                         let y = chunk_result.y + dy;
                                         for dx in 0..chunk_result.width {
@@ -1344,34 +1403,36 @@ impl eframe::App for FractalApp {
                                     }
                                 }
 
-                                self.render_chunk_start += chunk_result.height;
-                                if self.render_chunk_start >= region.height {
-                                    self.current_region_index += 1;
-                                    self.render_chunk_start = 0;
+                                self.render.render_chunk_start += chunk_result.height;
+                                if self.render.render_chunk_start >= region.height {
+                                    self.render.current_region_index += 1;
+                                    self.render.render_chunk_start = 0;
                                 }
 
-                                self.texture_dirty = true;
-                                self.render_progress = (self.current_region_index as f32
-                                    + self.render_chunk_start as f32 / region.height as f32)
-                                    / self.partial_render_regions.len() as f32;
+                                self.render.texture_dirty = true;
+                                self.render.render_progress = (self.render.current_region_index
+                                    as f32
+                                    + self.render.render_chunk_start as f32 / region.height as f32)
+                                    / self.render.partial_render_regions.len() as f32;
                                 ctx.request_repaint();
                             } else {
                                 // Region complete
-                                self.current_region_index += 1;
-                                self.render_chunk_start = 0;
+                                self.render.current_region_index += 1;
+                                self.render.render_chunk_start = 0;
                                 ctx.request_repaint();
                             }
                         } else {
                             // All regions complete
-                            self.is_rendering = false;
-                            self.render_progress = 0.0;
-                            self.partial_render_regions.clear();
-                            self.current_region_index = 0;
-                            self.render_chunk_start = 0;
-                            self.render_config = None;
+                            self.render.is_rendering = false;
+                            self.render.render_progress = 0.0;
+                            self.render.partial_render_regions.clear();
+                            self.render.current_region_index = 0;
+                            self.render.render_chunk_start = 0;
+                            self.render.config = None;
 
-                            if let Some(start_time) = self.render_start_time.take() {
-                                self.last_render_time = Some(start_time.elapsed().as_secs_f64());
+                            if let Some(start_time) = self.render.render_start_time.take() {
+                                self.render.last_render_time =
+                                    Some(start_time.elapsed().as_secs_f64());
                             }
                             ctx.request_repaint();
                         }
@@ -1380,41 +1441,42 @@ impl eframe::App for FractalApp {
                         let (_render_width, render_height) = config.render_dimensions();
                         let chunk_size = ((render_height as f64 / 60.0).ceil() as u32).max(1);
 
-                        let has_more = self.render_engine.render_full_chunk(
+                        let has_more = self.render.engine.render_full_chunk(
                             self.fractal.as_ref(),
                             &self.get_view(),
                             config,
-                            self.render_chunk_start,
+                            self.render.render_chunk_start,
                             chunk_size,
                         );
 
                         if has_more {
-                            self.render_chunk_start +=
-                                chunk_size.min(render_height - self.render_chunk_start);
-                            self.render_progress =
-                                self.render_chunk_start as f32 / render_height as f32;
+                            self.render.render_chunk_start +=
+                                chunk_size.min(render_height - self.render.render_chunk_start);
+                            self.render.render_progress =
+                                self.render.render_chunk_start as f32 / render_height as f32;
                             ctx.request_repaint();
                         } else {
                             // Rendering complete
-                            if let Some(pixels) = self.render_engine.finalize(config) {
-                                self.cached_fractal_image = Some(egui::ColorImage {
+                            if let Some(pixels) = self.render.engine.finalize(config) {
+                                self.render.cached_image = Some(egui::ColorImage {
                                     size: [config.width as _, config.height as _],
                                     pixels,
                                 });
-                                self.texture_dirty = true;
+                                self.render.texture_dirty = true;
                             }
 
-                            self.cached_width = config.width;
-                            self.cached_height = config.height;
-                            self.needs_render = false;
-                            self.is_rendering = false;
-                            self.render_progress = 0.0;
-                            self.zoom_preview = None;
-                            self.render_chunk_start = 0;
-                            self.render_config = None;
+                            self.render.cached_width = config.width;
+                            self.render.cached_height = config.height;
+                            self.render.needs_render = false;
+                            self.render.is_rendering = false;
+                            self.render.render_progress = 0.0;
+                            self.interaction.zoom_preview = None;
+                            self.render.render_chunk_start = 0;
+                            self.render.config = None;
 
-                            if let Some(start_time) = self.render_start_time.take() {
-                                self.last_render_time = Some(start_time.elapsed().as_secs_f64());
+                            if let Some(start_time) = self.render.render_start_time.take() {
+                                self.render.last_render_time =
+                                    Some(start_time.elapsed().as_secs_f64());
                             }
                             ctx.request_repaint();
                         }
@@ -1423,9 +1485,9 @@ impl eframe::App for FractalApp {
             }
 
             // Start new render if needed
-            if self.needs_render && !self.is_rendering && !self.show_bookmark_dialog {
+            if self.render.needs_render && !self.render.is_rendering && !self.show_bookmark_dialog {
                 let view = self.get_view();
-                let max_iter = if self.adaptive_iterations {
+                let max_iter = if self.render.adaptive_iterations {
                     self.calculate_adaptive_iterations(view.zoom)
                 } else {
                     self.controls.max_iterations
@@ -1434,7 +1496,7 @@ impl eframe::App for FractalApp {
                 let config = RenderConfig {
                     width,
                     height,
-                    supersampling: self.supersampling_enabled,
+                    supersampling: self.render.supersampling_enabled,
                     max_iterations: max_iter,
                     palette_type: self.controls.palette_type,
                     palette_offset: self.controls.palette_offset,
@@ -1443,14 +1505,14 @@ impl eframe::App for FractalApp {
                     ),
                 };
 
-                self.render_engine.start_render(&config);
-                self.render_config = Some(config);
-                self.is_rendering = true;
-                self.render_start_time = Some(Instant::now());
-                self.render_progress = 0.0;
-                self.render_chunk_start = 0;
-                self.current_region_index = 0;
-                self.needs_render = false;
+                self.render.engine.start_render(&config);
+                self.render.config = Some(config);
+                self.render.is_rendering = true;
+                self.render.render_start_time = Some(Instant::now());
+                self.render.render_progress = 0.0;
+                self.render.render_chunk_start = 0;
+                self.render.current_region_index = 0;
+                self.render.needs_render = false;
                 ctx.request_repaint();
             }
         });
@@ -1459,13 +1521,13 @@ impl eframe::App for FractalApp {
     fn on_exit(&mut self, _ctx: Option<&eframe::glow::Context>) {
         // Save window size on exit
         let config = AppConfig {
-            window_width: 1200.0, // Could get actual size from ctx
-            window_height: 800.0,
+            window_width: self.actual_window_width,
+            window_height: self.actual_window_height,
             default_iterations: self.controls.max_iterations,
             default_fractal: self.controls.fractal_type,
             default_palette: self.controls.palette_type,
-            supersampling_enabled: self.supersampling_enabled,
-            adaptive_iterations: self.adaptive_iterations,
+            supersampling_enabled: self.render.supersampling_enabled,
+            adaptive_iterations: self.render.adaptive_iterations,
             bookmarks: self.bookmarks.clone(),
         };
         if let Err(e) = config.save() {

@@ -5,6 +5,11 @@ use crate::color_pipeline::{FractalResult, OrbitData};
 
 pub mod registry;
 
+/// Squared bailout radius: escape when |z|^2 > BAILOUT_R2
+const BAILOUT_R2: f64 = 4.0;
+/// Epsilon for power=2 fast path comparison
+const POWER2_EPSILON: f64 = 1e-10;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum FractalType {
     #[default]
@@ -177,11 +182,11 @@ impl Mandelbrot {
             let r2 = z_re * z_re;
             let i2 = z_im * z_im;
 
-            if r2 + i2 > 4.0 {
+            if r2 + i2 > BAILOUT_R2 {
                 return i;
             }
 
-            if (power - 2.0).abs() < 1e-10 {
+            if (power - 2.0).abs() < POWER2_EPSILON {
                 // Fast path for power=2: use direct algebraic formula
                 let new_re = r2 - i2 + c_re;
                 let new_im = 2.0 * z_re * z_im + c_im;
@@ -212,11 +217,11 @@ impl Mandelbrot {
             let r2 = z_re * z_re;
             let i2 = z_im * z_im;
 
-            if r2 + i2 > 4.0 {
+            if r2 + i2 > BAILOUT_R2 {
                 return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
             }
 
-            if (power - 2.0).abs() < 1e-10 {
+            if (power - 2.0).abs() < POWER2_EPSILON {
                 let new_re = r2 - i2 + c_re;
                 let new_im = 2.0 * z_re * z_im + c_im;
                 z_re = new_re;
@@ -323,11 +328,11 @@ impl Fractal for Julia {
             let r2 = z_re * z_re;
             let i2 = z_im * z_im;
 
-            if r2 + i2 > 4.0 {
+            if r2 + i2 > BAILOUT_R2 {
                 return i;
             }
 
-            if (power - 2.0).abs() < 1e-10 {
+            if (power - 2.0).abs() < POWER2_EPSILON {
                 let new_re = r2 - i2 + c_re;
                 let new_im = 2.0 * z_re * z_im + c_im;
                 z_re = new_re;
@@ -355,11 +360,11 @@ impl Fractal for Julia {
             let r2 = z_re * z_re;
             let i2 = z_im * z_im;
 
-            if r2 + i2 > 4.0 {
+            if r2 + i2 > BAILOUT_R2 {
                 return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
             }
 
-            if (power - 2.0).abs() < 1e-10 {
+            if (power - 2.0).abs() < POWER2_EPSILON {
                 let new_re = r2 - i2 + c_re;
                 let new_im = 2.0 * z_re * z_im + c_im;
                 z_re = new_re;
@@ -410,7 +415,7 @@ impl BurningShip {
             let r2 = z_re * z_re;
             let i2 = z_im * z_im;
 
-            if r2 + i2 > 4.0 {
+            if r2 + i2 > BAILOUT_R2 {
                 return i;
             }
 
@@ -418,7 +423,7 @@ impl BurningShip {
             z_re = z_re.abs();
             z_im = z_im.abs();
 
-            if (power - 2.0).abs() < 1e-10 {
+            if (power - 2.0).abs() < POWER2_EPSILON {
                 let new_re = r2 - i2 + c_re;
                 let new_im = 2.0 * z_re * z_im + c_im;
                 z_re = new_re;
@@ -446,14 +451,14 @@ impl BurningShip {
             let r2 = z_re * z_re;
             let i2 = z_im * z_im;
 
-            if r2 + i2 > 4.0 {
+            if r2 + i2 > BAILOUT_R2 {
                 return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
             }
 
             z_re = z_re.abs();
             z_im = z_im.abs();
 
-            if (power - 2.0).abs() < 1e-10 {
+            if (power - 2.0).abs() < POWER2_EPSILON {
                 let new_re = r2 - i2 + c_re;
                 let new_im = 2.0 * z_re * z_im + c_im;
                 z_re = new_re;
@@ -506,11 +511,11 @@ impl Tricorn {
             let r2 = z_re * z_re;
             let i2 = z_im * z_im;
 
-            if r2 + i2 > 4.0 {
+            if r2 + i2 > BAILOUT_R2 {
                 return i;
             }
 
-            if (power - 2.0).abs() < 1e-10 {
+            if (power - 2.0).abs() < POWER2_EPSILON {
                 // Conjugation for power=2: conj(z)^2 = (a - bi)^2 = (a^2 - b^2) - 2abi
                 let new_re = r2 - i2 + c_re;
                 let new_im = -2.0 * z_re * z_im + c_im;
@@ -540,11 +545,11 @@ impl Tricorn {
             let r2 = z_re * z_re;
             let i2 = z_im * z_im;
 
-            if r2 + i2 > 4.0 {
+            if r2 + i2 > BAILOUT_R2 {
                 return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
             }
 
-            if (power - 2.0).abs() < 1e-10 {
+            if (power - 2.0).abs() < POWER2_EPSILON {
                 let new_re = r2 - i2 + c_re;
                 let new_im = -2.0 * z_re * z_im + c_im;
                 z_re = new_re;
@@ -599,11 +604,11 @@ impl Celtic {
             let r2 = z_re * z_re;
             let i2 = z_im * z_im;
 
-            if r2 + i2 > 4.0 {
+            if r2 + i2 > BAILOUT_R2 {
                 return i;
             }
 
-            if (power - 2.0).abs() < 1e-10 {
+            if (power - 2.0).abs() < POWER2_EPSILON {
                 // Celtic for power=2: standard z^2+c with abs on real part
                 // Must compute both from OLD z_re/z_im before assigning
                 let new_re = (r2 - i2 + c_re).abs();
@@ -634,11 +639,11 @@ impl Celtic {
             let r2 = z_re * z_re;
             let i2 = z_im * z_im;
 
-            if r2 + i2 > 4.0 {
+            if r2 + i2 > BAILOUT_R2 {
                 return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
             }
 
-            if (power - 2.0).abs() < 1e-10 {
+            if (power - 2.0).abs() < POWER2_EPSILON {
                 let new_re = (r2 - i2 + c_re).abs();
                 let new_im = 2.0 * z_re * z_im + c_im;
                 z_re = new_re;
@@ -904,7 +909,7 @@ impl Fractal for Biomorph {
             }
 
             // z = z^power + c
-            if (power - 2.0).abs() < 1e-10 {
+            if (power - 2.0).abs() < POWER2_EPSILON {
                 let new_re = r2 - i2 + c_re;
                 let new_im = 2.0 * z_re * z_im + c_im;
                 z_re = new_re;
@@ -950,7 +955,7 @@ impl Fractal for Biomorph {
                 return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
             }
 
-            if (power - 2.0).abs() < 1e-10 {
+            if (power - 2.0).abs() < POWER2_EPSILON {
                 let new_re = r2 - i2 + c_re;
                 let new_im = 2.0 * z_re * z_im + c_im;
                 z_re = new_re;
@@ -1060,7 +1065,7 @@ impl Fractal for Phoenix {
             let r2 = z_re * z_re;
             let i2 = z_im * z_im;
 
-            if r2 + i2 > 4.0 {
+            if r2 + i2 > BAILOUT_R2 {
                 return i;
             }
 
@@ -1091,7 +1096,7 @@ impl Fractal for Phoenix {
             let r2 = z_re * z_re;
             let i2 = z_im * z_im;
 
-            if r2 + i2 > 4.0 {
+            if r2 + i2 > BAILOUT_R2 {
                 return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
             }
 
@@ -1121,13 +1126,18 @@ impl Fractal for Phoenix {
 /// Power 2 gives standard Mandelbrot, power 3 gives the cubic Multibrot
 /// (3 lobes), power 4 gives 4 lobes, and so on. Each integer power d
 /// produces a set with (d-1) lobes around the origin.
+///
+/// Delegates to Mandelbrot's compute methods (identical formula, different
+/// default power and parameter range).
 pub struct Multibrot {
-    pub power: f64,
+    inner: Mandelbrot,
 }
 
 impl Default for Multibrot {
     fn default() -> Self {
-        Multibrot { power: 3.0 }
+        Multibrot {
+            inner: Mandelbrot { power: 3.0 },
+        }
     }
 }
 
@@ -1139,7 +1149,7 @@ impl Fractal for Multibrot {
     fn parameters(&self) -> Vec<Parameter> {
         vec![Parameter {
             name: "power".to_string(),
-            value: self.power,
+            value: self.inner.power,
             min: 2.0,
             max: 10.0,
         }]
@@ -1147,80 +1157,23 @@ impl Fractal for Multibrot {
 
     fn set_parameter(&mut self, name: &str, value: f64) {
         if name == "power" {
-            self.power = value.clamp(2.0, 10.0);
+            self.inner.power = value.clamp(2.0, 10.0);
         }
     }
 
     fn get_parameter(&self, name: &str) -> Option<f64> {
         match name {
-            "power" => Some(self.power),
+            "power" => Some(self.inner.power),
             _ => None,
         }
     }
 
     fn compute(&self, cx: f64, cy: f64, max_iter: u32) -> u32 {
-        let mut z_re: f64 = 0.0;
-        let mut z_im: f64 = 0.0;
-        let c_re = cx;
-        let c_im = cy;
-        let power = self.power;
-
-        for i in 0..max_iter {
-            let r2 = z_re * z_re;
-            let i2 = z_im * z_im;
-
-            if r2 + i2 > 4.0 {
-                return i;
-            }
-
-            if (power - 2.0).abs() < 1e-10 {
-                let new_re = r2 - i2 + c_re;
-                let new_im = 2.0 * z_re * z_im + c_im;
-                z_re = new_re;
-                z_im = new_im;
-            } else {
-                let angle = power * z_im.atan2(z_re);
-                let radius = (r2 + i2).powf(power / 2.0);
-                z_re = radius * angle.cos() + c_re;
-                z_im = radius * angle.sin() + c_im;
-            }
-        }
-
-        max_iter
+        self.inner.compute_point(cx, cy, max_iter)
     }
 
     fn compute_full(&self, cx: f64, cy: f64, max_iter: u32) -> FractalResult {
-        let mut z_re: f64 = 0.0;
-        let mut z_im: f64 = 0.0;
-        let c_re = cx;
-        let c_im = cy;
-        let power = self.power;
-        let mut orbit_data = OrbitData::new();
-
-        for i in 0..max_iter {
-            let r2 = z_re * z_re;
-            let i2 = z_im * z_im;
-
-            if r2 + i2 > 4.0 {
-                return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
-            }
-
-            if (power - 2.0).abs() < 1e-10 {
-                let new_re = r2 - i2 + c_re;
-                let new_im = 2.0 * z_re * z_im + c_im;
-                z_re = new_re;
-                z_im = new_im;
-            } else {
-                let angle = power * z_im.atan2(z_re);
-                let radius = (r2 + i2).powf(power / 2.0);
-                z_re = radius * angle.cos() + c_re;
-                z_im = radius * angle.sin() + c_im;
-            }
-
-            orbit_data.update(Complex64::new(z_re, z_im));
-        }
-
-        FractalResult::inside_set(max_iter)
+        self.inner.compute_point_full(cx, cy, max_iter)
     }
 }
 
@@ -1270,7 +1223,7 @@ impl Fractal for Spider {
             let r2 = z_re * z_re;
             let i2 = z_im * z_im;
 
-            if r2 + i2 > 4.0 {
+            if r2 + i2 > BAILOUT_R2 {
                 return i;
             }
 
@@ -1299,7 +1252,7 @@ impl Fractal for Spider {
             let r2 = z_re * z_re;
             let i2 = z_im * z_im;
 
-            if r2 + i2 > 4.0 {
+            if r2 + i2 > BAILOUT_R2 {
                 return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
             }
 
@@ -1391,7 +1344,7 @@ impl Fractal for OrbitTrap {
             let r2 = z_re * z_re;
             let i2 = z_im * z_im;
 
-            if r2 + i2 > 4.0 {
+            if r2 + i2 > BAILOUT_R2 {
                 let dist = min_distance_sq.sqrt();
                 let trap_value = (1.0 / (1.0 + dist * 10.0) * max_iter as f64) as u32;
                 return trap_value.min(max_iter - 1);
@@ -1425,7 +1378,7 @@ impl Fractal for OrbitTrap {
             let r2 = z_re * z_re;
             let i2 = z_im * z_im;
 
-            if r2 + i2 > 4.0 {
+            if r2 + i2 > BAILOUT_R2 {
                 let dist = min_distance_sq.sqrt();
                 let trap_value = (1.0 / (1.0 + dist * 10.0) * max_iter as f64) as u32;
                 let iters = trap_value.min(max_iter - 1);
@@ -1524,7 +1477,7 @@ impl Fractal for PickoverStalk {
             let r2 = z_re * z_re;
             let i2 = z_im * z_im;
 
-            if r2 + i2 > 4.0 {
+            if r2 + i2 > BAILOUT_R2 {
                 let normalized = trap_distance / self.stalk_thickness;
                 let stalk_brightness = 1.0 / (1.0 + normalized * self.stalk_intensity);
                 let final_value = (stalk_brightness * iteration as f64) as u32;
@@ -1560,7 +1513,7 @@ impl Fractal for PickoverStalk {
             let r2 = z_re * z_re;
             let i2 = z_im * z_im;
 
-            if r2 + i2 > 4.0 {
+            if r2 + i2 > BAILOUT_R2 {
                 let normalized = trap_distance / self.stalk_thickness;
                 let stalk_brightness = 1.0 / (1.0 + normalized * self.stalk_intensity);
                 let final_value = (stalk_brightness * iteration as f64) as u32;
