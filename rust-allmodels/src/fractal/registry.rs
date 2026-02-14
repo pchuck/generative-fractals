@@ -300,14 +300,14 @@ impl FractalFactory for MultibrotFactory {
 struct SpiderFactory;
 impl FractalFactory for SpiderFactory {
     fn create(&self) -> Box<dyn Fractal> {
-        Box::new(Spider::default())
+        Box::new(Spider)
     }
 
     fn metadata(&self) -> FractalMetadata {
         FractalMetadata {
             id: "spider".to_string(),
             display_name: "Spider".to_string(),
-            description: Some("Spider fractal".to_string()),
+            description: Some("Spider fractal with evolving c parameter".to_string()),
             default_center: (0.0, 0.0),
             default_zoom: 1.0,
             category: FractalCategory::Special,
@@ -315,7 +315,7 @@ impl FractalFactory for SpiderFactory {
     }
 
     fn default_parameters(&self) -> Vec<Parameter> {
-        Spider::default().parameters()
+        Spider.parameters()
     }
 }
 

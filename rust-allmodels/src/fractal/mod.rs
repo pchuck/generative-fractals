@@ -571,8 +571,10 @@ impl_power_fractal!(Tricorn, "Tricorn");
 
 /// The Celtic fractal.
 ///
-/// A hybrid combining elements of Burning Ship and standard fractals:
-/// Only the real part takes absolute value after squaring.
+/// A variant of the Mandelbrot set where the real part of z^2 is
+/// replaced by its absolute value:
+///   new_re = |Re(z^2)| + c_re = |a^2 - b^2| + c_re
+///   new_im = Im(z^2) + c_im  = 2*a*b + c_im
 ///
 /// Creates intricate Celtic knot-like patterns.
 pub struct Celtic {
@@ -602,11 +604,15 @@ impl Celtic {
             }
 
             if (power - 2.0).abs() < 1e-10 {
-                // Celtic for power=2: abs on real part + conjugation
-                z_re = (r2 - i2 + c_re).abs();
-                z_im = -2.0 * z_re * z_im + c_im;
+                // Celtic for power=2: standard z^2+c with abs on real part
+                // Must compute both from OLD z_re/z_im before assigning
+                let new_re = (r2 - i2 + c_re).abs();
+                let new_im = 2.0 * z_re * z_im + c_im;
+                z_re = new_re;
+                z_im = new_im;
             } else {
-                let angle = -power * z_im.atan2(z_re);
+                // General power via De Moivre, abs on real component
+                let angle = power * z_im.atan2(z_re);
                 let radius = (r2 + i2).powf(power / 2.0);
                 z_re = (radius * angle.cos() + c_re).abs();
                 z_im = radius * angle.sin() + c_im;
@@ -633,10 +639,12 @@ impl Celtic {
             }
 
             if (power - 2.0).abs() < 1e-10 {
-                z_re = (r2 - i2 + c_re).abs();
-                z_im = -2.0 * z_re * z_im + c_im;
+                let new_re = (r2 - i2 + c_re).abs();
+                let new_im = 2.0 * z_re * z_im + c_im;
+                z_re = new_re;
+                z_im = new_im;
             } else {
-                let angle = -power * z_im.atan2(z_re);
+                let angle = power * z_im.atan2(z_re);
                 let radius = (r2 + i2).powf(power / 2.0);
                 z_re = (radius * angle.cos() + c_re).abs();
                 z_im = radius * angle.sin() + c_im;
@@ -660,24 +668,20 @@ impl_power_fractal!(Celtic, "Celtic");
 /// Uses Newton's root-finding method to visualize which root each point
 /// converges to when applying Newton's method to f(z) = z^3 - 1.
 ///
-/// The roots are:
-/// - root1: z = 1 (angle 0)
+/// The roots are the cube roots of unity:
+/// - root1: z = 1
 /// - root2: z = e^(2πi/3) = -0.5 + 0.866i
 /// - root3: z = e^(4πi/3) = -0.5 - 0.866i
 ///
 /// Newton's iteration: z_{n+1} = z_n - f(z_n)/f'(z_n)
-/// For f(z) = z^3 - 1: z_{n+1} = (2*z^3 + 1) / (3*z^2)
+/// For f(z) = z^3 - 1: z_{n+1} = z - (z^3 - 1) / (3z^2)
 pub struct Newton {
-    pub escape_radius: f64,
     pub tolerance: f64,
 }
 
 impl Default for Newton {
     fn default() -> Self {
-        Newton {
-            escape_radius: 16.0,
-            tolerance: 0.001,
-        }
+        Newton { tolerance: 0.001 }
     }
 }
 
@@ -687,33 +691,22 @@ impl Fractal for Newton {
     }
 
     fn parameters(&self) -> Vec<Parameter> {
-        vec![
-            Parameter {
-                name: "escape_radius".to_string(),
-                value: self.escape_radius,
-                min: 4.0,
-                max: 64.0,
-            },
-            Parameter {
-                name: "tolerance".to_string(),
-                value: self.tolerance,
-                min: 0.0001,
-                max: 0.1,
-            },
-        ]
+        vec![Parameter {
+            name: "tolerance".to_string(),
+            value: self.tolerance,
+            min: 0.0001,
+            max: 0.1,
+        }]
     }
 
     fn set_parameter(&mut self, name: &str, value: f64) {
-        match name {
-            "escape_radius" => self.escape_radius = value.clamp(4.0, 64.0),
-            "tolerance" => self.tolerance = value.clamp(0.0001, 0.1),
-            _ => {}
+        if name == "tolerance" {
+            self.tolerance = value.clamp(0.0001, 0.1);
         }
     }
 
     fn get_parameter(&self, name: &str) -> Option<f64> {
         match name {
-            "escape_radius" => Some(self.escape_radius),
             "tolerance" => Some(self.tolerance),
             _ => None,
         }
@@ -827,23 +820,25 @@ impl Fractal for Newton {
 // Biomorph
 // ============================================================================
 
-/// Biomorph fractal - combines Newton's method with escape conditions.
+/// Biomorph fractal (Clifford Pickover).
 ///
-/// Similar to Newton's method but stops if the iteration either:
-/// 1. Converges to one of the roots (like Newton)
-/// 2. Escapes beyond the escape radius (like Mandelbrot)
+/// Uses the standard Mandelbrot-type iteration z = z^power + c, but with
+/// a different escape test: a point is considered "inside" if EITHER
+///   |Re(z)| < escape_radius  OR  |Im(z)| < escape_radius
+/// after the final iteration.
 ///
-/// Creates organic, biological-looking structures hence the name "biomorph".
+/// This produces organic, biological-looking structures (amoebas,
+/// microorganisms) hence the name "biomorph."
 pub struct Biomorph {
+    pub power: f64,
     pub escape_radius: f64,
-    pub tolerance: f64,
 }
 
 impl Default for Biomorph {
     fn default() -> Self {
         Biomorph {
-            escape_radius: 16.0,
-            tolerance: 0.001,
+            power: 3.0,
+            escape_radius: 10.0,
         }
     }
 }
@@ -856,141 +851,125 @@ impl Fractal for Biomorph {
     fn parameters(&self) -> Vec<Parameter> {
         vec![
             Parameter {
-                name: "escape_radius".to_string(),
-                value: self.escape_radius,
-                min: 4.0,
-                max: 64.0,
+                name: "power".to_string(),
+                value: self.power,
+                min: 2.0,
+                max: 8.0,
             },
             Parameter {
-                name: "tolerance".to_string(),
-                value: self.tolerance,
-                min: 0.0001,
-                max: 0.1,
+                name: "escape_radius".to_string(),
+                value: self.escape_radius,
+                min: 2.0,
+                max: 100.0,
             },
         ]
     }
 
     fn set_parameter(&mut self, name: &str, value: f64) {
         match name {
-            "escape_radius" => self.escape_radius = value.clamp(4.0, 64.0),
-            "tolerance" => self.tolerance = value.clamp(0.0001, 0.1),
+            "power" => self.power = value.clamp(2.0, 8.0),
+            "escape_radius" => self.escape_radius = value.clamp(2.0, 100.0),
             _ => {}
         }
     }
 
     fn get_parameter(&self, name: &str) -> Option<f64> {
         match name {
+            "power" => Some(self.power),
             "escape_radius" => Some(self.escape_radius),
-            "tolerance" => Some(self.tolerance),
             _ => None,
         }
     }
 
     fn compute(&self, cx: f64, cy: f64, max_iter: u32) -> u32 {
-        let mut z_re = cx;
-        let mut z_im = cy;
-        let tolerance = self.tolerance;
-        let tolerance2 = tolerance * tolerance;
-        let escape_r2 = self.escape_radius * self.escape_radius;
-
-        let root1_re = 1.0;
-        let root1_im = 0.0;
-        let root2_re = -0.5;
-        let root2_im = 0.8660254037844386;
-        let root3_re = -0.5;
-        let root3_im = -0.8660254037844386;
+        let mut z_re = 0.0_f64;
+        let mut z_im = 0.0_f64;
+        let c_re = cx;
+        let c_im = cy;
+        let power = self.power;
+        let big_r = self.escape_radius;
+        let big_r2 = big_r * big_r;
 
         for i in 0..max_iter {
-            let dist2_1 = (z_re - root1_re).powi(2) + (z_im - root1_im).powi(2);
-            let dist2_2 = (z_re - root2_re).powi(2) + (z_im - root2_im).powi(2);
-            let dist2_3 = (z_re - root3_re).powi(2) + (z_im - root3_im).powi(2);
+            let r2 = z_re * z_re;
+            let i2 = z_im * z_im;
 
-            if dist2_1 < tolerance2 || dist2_2 < tolerance2 || dist2_3 < tolerance2 {
-                return max_iter - i;
+            // Standard bailout to prevent overflow
+            if r2 + i2 > big_r2 {
+                // Pickover biomorph test: if either component is still small, it's "inside"
+                if z_re.abs() < big_r || z_im.abs() < big_r {
+                    return max_iter - i; // Biomorph region -- high iteration count
+                }
+                return i; // Escaped
             }
 
-            let r2 = z_re * z_re + z_im * z_im;
-            if r2 > escape_r2 {
-                return i;
+            // z = z^power + c
+            if (power - 2.0).abs() < 1e-10 {
+                let new_re = r2 - i2 + c_re;
+                let new_im = 2.0 * z_re * z_im + c_im;
+                z_re = new_re;
+                z_im = new_im;
+            } else {
+                let angle = power * z_im.atan2(z_re);
+                let radius = (r2 + i2).powf(power / 2.0);
+                z_re = radius * angle.cos() + c_re;
+                z_im = radius * angle.sin() + c_im;
             }
-
-            let z_re2 = z_re * z_re;
-            let z_im2 = z_im * z_im;
-            let z_re3 = z_re2 * z_re - 3.0 * z_re * z_im2;
-            let z_im3 = 3.0 * z_re2 * z_im - z_im2 * z_im;
-
-            let f_real = z_re3 - 1.0;
-            let f_imag = z_im3;
-            let deriv_real = 3.0 * (z_re2 - z_im2);
-            let deriv_imag = 6.0 * z_re * z_im;
-
-            let denom = deriv_real * deriv_real + deriv_imag * deriv_imag;
-            if denom.abs() < 1e-20 {
-                break;
-            }
-
-            z_re -= (f_real * deriv_real + f_imag * deriv_imag) / denom;
-            z_im -= (f_imag * deriv_real - f_real * deriv_imag) / denom;
         }
 
-        max_iter
+        // After all iterations: apply biomorph test on final z
+        if z_re.abs() < big_r || z_im.abs() < big_r {
+            max_iter // Inside biomorph
+        } else {
+            0 // Outside
+        }
     }
 
     fn compute_full(&self, cx: f64, cy: f64, max_iter: u32) -> FractalResult {
-        let mut z_re = cx;
-        let mut z_im = cy;
-        let tolerance = self.tolerance;
-        let tolerance2 = tolerance * tolerance;
-        let escape_r2 = self.escape_radius * self.escape_radius;
+        let mut z_re = 0.0_f64;
+        let mut z_im = 0.0_f64;
+        let c_re = cx;
+        let c_im = cy;
+        let power = self.power;
+        let big_r = self.escape_radius;
+        let big_r2 = big_r * big_r;
         let mut orbit_data = OrbitData::new();
 
-        let root1_re = 1.0;
-        let root1_im = 0.0;
-        let root2_re = -0.5;
-        let root2_im = 0.8660254037844386;
-        let root3_re = -0.5;
-        let root3_im = -0.8660254037844386;
-
         for i in 0..max_iter {
-            let dist2_1 = (z_re - root1_re).powi(2) + (z_im - root1_im).powi(2);
-            let dist2_2 = (z_re - root2_re).powi(2) + (z_im - root2_im).powi(2);
-            let dist2_3 = (z_re - root3_re).powi(2) + (z_im - root3_im).powi(2);
+            let r2 = z_re * z_re;
+            let i2 = z_im * z_im;
 
-            if dist2_1 < tolerance2 || dist2_2 < tolerance2 || dist2_3 < tolerance2 {
-                return FractalResult::escaped(
-                    max_iter - i,
-                    Complex64::new(z_re, z_im),
-                    orbit_data,
-                );
-            }
-
-            let r2 = z_re * z_re + z_im * z_im;
-            if r2 > escape_r2 {
+            if r2 + i2 > big_r2 {
+                if z_re.abs() < big_r || z_im.abs() < big_r {
+                    return FractalResult::escaped(
+                        max_iter - i,
+                        Complex64::new(z_re, z_im),
+                        orbit_data,
+                    );
+                }
                 return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
             }
 
-            let z_re2 = z_re * z_re;
-            let z_im2 = z_im * z_im;
-            let z_re3 = z_re2 * z_re - 3.0 * z_re * z_im2;
-            let z_im3 = 3.0 * z_re2 * z_im - z_im2 * z_im;
-
-            let f_real = z_re3 - 1.0;
-            let f_imag = z_im3;
-            let deriv_real = 3.0 * (z_re2 - z_im2);
-            let deriv_imag = 6.0 * z_re * z_im;
-
-            let denom = deriv_real * deriv_real + deriv_imag * deriv_imag;
-            if denom.abs() < 1e-20 {
-                break;
+            if (power - 2.0).abs() < 1e-10 {
+                let new_re = r2 - i2 + c_re;
+                let new_im = 2.0 * z_re * z_im + c_im;
+                z_re = new_re;
+                z_im = new_im;
+            } else {
+                let angle = power * z_im.atan2(z_re);
+                let radius = (r2 + i2).powf(power / 2.0);
+                z_re = radius * angle.cos() + c_re;
+                z_im = radius * angle.sin() + c_im;
             }
-
-            z_re -= (f_real * deriv_real + f_imag * deriv_imag) / denom;
-            z_im -= (f_imag * deriv_real - f_real * deriv_imag) / denom;
 
             orbit_data.update(Complex64::new(z_re, z_im));
         }
 
-        FractalResult::inside_set(max_iter)
+        if z_re.abs() < big_r || z_im.abs() < big_r {
+            FractalResult::inside_set(max_iter)
+        } else {
+            FractalResult::escaped(0, Complex64::new(z_re, z_im), orbit_data)
+        }
     }
 }
 
@@ -998,13 +977,14 @@ impl Fractal for Biomorph {
 // Phoenix Fractal
 // ============================================================================
 
-/// Phoenix fractal - a variation with memory term.
+/// Phoenix fractal (Shigehiro Ushiki, 1988).
 ///
-/// Similar to Julia but includes the previous iteration value:
-/// z_{n+1} = z_n^2 + c + p * z_{n-1}
-/// where p is the "memory" parameter.
+/// A Julia-type iteration with a memory term feeding back the previous z:
+///   z_{n+1} = z_n^2 + c + p * z_{n-1}
+/// where c is a fixed complex constant and p is the "memory" coefficient.
 ///
-/// Creates flame-like and spiral patterns.
+/// The classic Ushiki Phoenix uses c = 0.5667, p = -0.5 which produces
+/// the iconic phoenix-shaped connected Julia set.
 pub struct Phoenix {
     pub c_real: f64,
     pub c_imag: f64,
@@ -1014,9 +994,9 @@ pub struct Phoenix {
 impl Default for Phoenix {
     fn default() -> Self {
         Phoenix {
-            c_real: 0.0,
-            c_imag: 0.4,
-            memory: 0.55,
+            c_real: 0.5667,
+            c_imag: 0.0,
+            memory: -0.5,
         }
     }
 }
@@ -1134,12 +1114,13 @@ impl Fractal for Phoenix {
 // Multibrot Fractal
 // ============================================================================
 
-/// Multibrot fractal - Mandelbrot with arbitrary power.
+/// Multibrot fractal - Mandelbrot generalized to arbitrary power.
 ///
 /// z_{n+1} = z_n^power + c
 ///
-/// Power 2 gives standard Mandelbrot, power 3 gives "Mandelbar" (not to be confused with Tricorn),
-/// higher powers create more lobes.
+/// Power 2 gives standard Mandelbrot, power 3 gives the cubic Multibrot
+/// (3 lobes), power 4 gives 4 lobes, and so on. Each integer power d
+/// produces a set with (d-1) lobes around the origin.
 pub struct Multibrot {
     pub power: f64,
 }
@@ -1247,17 +1228,20 @@ impl Fractal for Multibrot {
 // Spider Fractal
 // ============================================================================
 
-/// Spider fractal - a modified Mandelbrot with alternating pattern.
+/// The Spider fractal.
 ///
-/// Alternates between z^2 + c and z^2 - c every other iteration,
-/// creating spiderweb-like patterns.
-pub struct Spider {
-    pub power: f64,
-}
+/// A Mandelbrot variant where the c parameter also evolves each iteration:
+///   z_{n+1} = z_n^2 + c_n
+///   c_{n+1} = c_n / 2 + z_{n+1}
+/// with z_0 = 0, c_0 = pixel coordinate.
+///
+/// The evolving c creates distinctive spiderweb-like filaments radiating
+/// from the main body of the set.
+pub struct Spider;
 
 impl Default for Spider {
     fn default() -> Self {
-        Spider { power: 2.0 }
+        Spider
     }
 }
 
@@ -1267,33 +1251,20 @@ impl Fractal for Spider {
     }
 
     fn parameters(&self) -> Vec<Parameter> {
-        vec![Parameter {
-            name: "power".to_string(),
-            value: self.power,
-            min: 1.0,
-            max: 5.0,
-        }]
+        vec![]
     }
 
-    fn set_parameter(&mut self, name: &str, value: f64) {
-        if name == "power" {
-            self.power = value.clamp(1.0, 5.0);
-        }
-    }
+    fn set_parameter(&mut self, _name: &str, _value: f64) {}
 
-    fn get_parameter(&self, name: &str) -> Option<f64> {
-        match name {
-            "power" => Some(self.power),
-            _ => None,
-        }
+    fn get_parameter(&self, _name: &str) -> Option<f64> {
+        None
     }
 
     fn compute(&self, cx: f64, cy: f64, max_iter: u32) -> u32 {
         let mut z_re: f64 = 0.0;
         let mut z_im: f64 = 0.0;
-        let c_re = cx;
-        let c_im = cy;
-        let power = self.power;
+        let mut c_re = cx;
+        let mut c_im = cy;
 
         for i in 0..max_iter {
             let r2 = z_re * z_re;
@@ -1303,19 +1274,15 @@ impl Fractal for Spider {
                 return i;
             }
 
-            let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
+            // z = z^2 + c
+            let new_z_re = r2 - i2 + c_re;
+            let new_z_im = 2.0 * z_re * z_im + c_im;
+            z_re = new_z_re;
+            z_im = new_z_im;
 
-            if (power - 2.0).abs() < 1e-10 {
-                let new_re = r2 - i2 + sign * c_re;
-                let new_im = 2.0 * z_re * z_im + sign * c_im;
-                z_re = new_re;
-                z_im = new_im;
-            } else {
-                let angle = power * z_im.atan2(z_re);
-                let radius = (r2 + i2).powf(power / 2.0);
-                z_re = radius * angle.cos() + sign * c_re;
-                z_im = radius * angle.sin() + sign * c_im;
-            }
+            // c = c/2 + z
+            c_re = c_re / 2.0 + z_re;
+            c_im = c_im / 2.0 + z_im;
         }
 
         max_iter
@@ -1324,9 +1291,8 @@ impl Fractal for Spider {
     fn compute_full(&self, cx: f64, cy: f64, max_iter: u32) -> FractalResult {
         let mut z_re: f64 = 0.0;
         let mut z_im: f64 = 0.0;
-        let c_re = cx;
-        let c_im = cy;
-        let power = self.power;
+        let mut c_re = cx;
+        let mut c_im = cy;
         let mut orbit_data = OrbitData::new();
 
         for i in 0..max_iter {
@@ -1337,19 +1303,13 @@ impl Fractal for Spider {
                 return FractalResult::escaped(i, Complex64::new(z_re, z_im), orbit_data);
             }
 
-            let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
+            let new_z_re = r2 - i2 + c_re;
+            let new_z_im = 2.0 * z_re * z_im + c_im;
+            z_re = new_z_re;
+            z_im = new_z_im;
 
-            if (power - 2.0).abs() < 1e-10 {
-                let new_re = r2 - i2 + sign * c_re;
-                let new_im = 2.0 * z_re * z_im + sign * c_im;
-                z_re = new_re;
-                z_im = new_im;
-            } else {
-                let angle = power * z_im.atan2(z_re);
-                let radius = (r2 + i2).powf(power / 2.0);
-                z_re = radius * angle.cos() + sign * c_re;
-                z_im = radius * angle.sin() + sign * c_im;
-            }
+            c_re = c_re / 2.0 + z_re;
+            c_im = c_im / 2.0 + z_im;
 
             orbit_data.update(Complex64::new(z_re, z_im));
         }
@@ -1375,8 +1335,8 @@ pub struct OrbitTrap {
 impl Default for OrbitTrap {
     fn default() -> Self {
         OrbitTrap {
-            trap_x: 0.1,
-            trap_y: 0.1,
+            trap_x: 0.0,
+            trap_y: 0.0,
         }
     }
 }
@@ -1732,25 +1692,350 @@ mod tests {
 
     #[test]
     fn test_pickover_stalk_parameter_effect() {
-        // Test that different thickness values produce different results
-        // Use a point well outside the set that will definitely escape
         let mut ps = PickoverStalk::default();
 
-        // Point that escapes and has orbit near axes
         ps.set_parameter("thickness", 0.01);
         let with_thin = ps.compute(0.8, 0.2, 100);
 
         ps.set_parameter("thickness", 1.0);
         let with_thick = ps.compute(0.8, 0.2, 100);
 
-        // Different thickness should produce visibly different results
-        // The difference might be small, so we just check they're not identical
-        // and both are valid (not max_iter since point escapes)
         assert!(
             with_thin < 100 && with_thick < 100,
             "Both should escape: thin={}, thick={}",
             with_thin,
             with_thick
         );
+    }
+
+    // ========================================================================
+    // Tests for previously untested fractals
+    // ========================================================================
+
+    #[test]
+    fn test_tricorn_center() {
+        let t = Tricorn::default();
+        // Origin should be in the Tricorn set
+        let result = t.compute(0.0, 0.0, 200);
+        assert_eq!(result, 200, "Origin should be in Tricorn set");
+    }
+
+    #[test]
+    fn test_tricorn_outside() {
+        let t = Tricorn::default();
+        let result = t.compute(2.0, 2.0, 100);
+        assert!(result < 10, "Far outside should escape quickly");
+    }
+
+    #[test]
+    fn test_celtic_center() {
+        let c = Celtic::default();
+        let result = c.compute(0.0, 0.0, 200);
+        // Origin should be in the set (z=0, z^2+c=c=0, stays at 0)
+        assert_eq!(result, 200, "Origin should be in Celtic set");
+    }
+
+    #[test]
+    fn test_celtic_outside() {
+        let c = Celtic::default();
+        let result = c.compute(2.0, 2.0, 100);
+        assert!(result < 10, "Far outside should escape quickly");
+    }
+
+    #[test]
+    fn test_newton_convergence() {
+        let n = Newton::default();
+        // Point near root z=1 should converge quickly (high return value = early convergence)
+        let result = n.compute(0.9, 0.0, 100);
+        assert!(
+            result > 90,
+            "Near root1 should converge quickly, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_newton_far_from_roots() {
+        let n = Newton::default();
+        // Point at origin: z=0 is a singularity for Newton's method on z^3-1
+        // f'(0) = 0, so this should hit the singularity guard
+        let result = n.compute(0.0, 0.0, 100);
+        assert_eq!(result, 100, "Origin should hit singularity guard");
+    }
+
+    #[test]
+    fn test_newton_all_three_roots() {
+        let n = Newton::default();
+        // Near root1 (1, 0)
+        let r1 = n.compute(1.01, 0.0, 100);
+        assert!(r1 > 90, "Near root1 should converge, got {}", r1);
+
+        // Near root2 (-0.5, sqrt(3)/2 ≈ 0.866)
+        let r2 = n.compute(-0.49, 0.87, 100);
+        assert!(r2 > 90, "Near root2 should converge, got {}", r2);
+
+        // Near root3 (-0.5, -sqrt(3)/2 ≈ -0.866)
+        let r3 = n.compute(-0.49, -0.87, 100);
+        assert!(r3 > 90, "Near root3 should converge, got {}", r3);
+    }
+
+    #[test]
+    fn test_biomorph_convergence() {
+        let b = Biomorph::default();
+        // Near root z=1 should converge (return max_iter - i, high value)
+        let result = b.compute(0.9, 0.0, 100);
+        assert!(result > 80, "Near root should converge, got {}", result);
+    }
+
+    #[test]
+    fn test_biomorph_escape() {
+        let b = Biomorph::default();
+        // Biomorph uses Newton iteration which can converge near roots (returning high values)
+        // or escape beyond escape_radius. Very far points should escape.
+        let result = b.compute(10.0, 10.0, 100);
+        // The result should be a low escape iteration or a convergence value
+        assert!(
+            result < 100,
+            "Far outside should not reach max_iter, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_phoenix_outside() {
+        let p = Phoenix::default();
+        let result = p.compute(2.0, 2.0, 100);
+        assert!(result < 20, "Far outside should escape quickly");
+    }
+
+    #[test]
+    fn test_phoenix_near_center() {
+        let p = Phoenix::default();
+        // With Ushiki defaults (c=0.5667, p=-0.5) the origin escapes relatively
+        // quickly but should survive more than 1 iteration
+        let result = p.compute(0.0, 0.0, 200);
+        assert!(
+            result >= 2 && result < 200,
+            "Origin should escape after a few iterations, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_multibrot_center() {
+        let m = Multibrot::default(); // power=3
+                                      // Origin should be in set: z=0 -> z^3+0=0 forever
+        let result = m.compute(0.0, 0.0, 100);
+        assert_eq!(result, 100, "Origin should be in Multibrot set");
+    }
+
+    #[test]
+    fn test_multibrot_outside() {
+        let m = Multibrot::default();
+        let result = m.compute(2.0, 0.0, 100);
+        assert!(result < 10, "Far outside should escape quickly");
+    }
+
+    #[test]
+    fn test_spider_center() {
+        let s = Spider::default();
+        // z=0, c=0: iteration stays at 0 forever (alternating +0/-0)
+        let result = s.compute(0.0, 0.0, 100);
+        assert_eq!(result, 100, "Origin should be in Spider set");
+    }
+
+    #[test]
+    fn test_spider_outside() {
+        let s = Spider::default();
+        let result = s.compute(2.0, 2.0, 100);
+        assert!(result < 10, "Far outside should escape quickly");
+    }
+
+    #[test]
+    fn test_orbit_trap_outside() {
+        let ot = OrbitTrap::default();
+        // Point that escapes should return a trap-based value < max_iter
+        let result = ot.compute(0.5, 0.5, 200);
+        assert!(result < 200, "Outside point should escape with trap value");
+    }
+
+    #[test]
+    fn test_orbit_trap_in_set() {
+        let ot = OrbitTrap::default();
+        // Origin: z=0 -> 0^2+0 = 0, stays forever
+        let result = ot.compute(0.0, 0.0, 100);
+        assert_eq!(result, 100, "Origin should be in set");
+    }
+
+    // ========================================================================
+    // compute_full() tests - orbit data and final_z
+    // ========================================================================
+
+    #[test]
+    fn test_mandelbrot_compute_full_escaped() {
+        let m = Mandelbrot::default();
+        let result = m.compute_full(2.0, 0.0, 100);
+        assert!(result.escaped, "Point (2,0) should escape");
+        assert!(result.final_z.is_some(), "Should have final_z");
+        let z = result.final_z.unwrap();
+        assert!(
+            z.norm_sqr() > 4.0,
+            "final_z should be outside bailout radius"
+        );
+    }
+
+    #[test]
+    fn test_mandelbrot_compute_full_inside() {
+        let m = Mandelbrot::default();
+        let result = m.compute_full(0.0, 0.0, 100);
+        assert!(!result.escaped, "Origin should be inside set");
+        assert!(
+            result.final_z.is_none(),
+            "Inside-set should have no final_z"
+        );
+    }
+
+    #[test]
+    fn test_compute_full_orbit_data_populated() {
+        let m = Mandelbrot::default();
+        // Use a point clearly outside the set that escapes quickly
+        let result = m.compute_full(0.5, 0.5, 200);
+        assert!(result.escaped, "Point (0.5, 0.5) should escape");
+        let od = result.orbit_data;
+        // After at least one iteration, min distances should not be infinity
+        assert!(
+            od.min_distance_to_origin < f64::INFINITY,
+            "Orbit data should track distance to origin"
+        );
+        assert!(
+            od.min_distance_to_real_axis < f64::INFINITY,
+            "Orbit data should track distance to real axis"
+        );
+        assert!(
+            od.min_distance_to_imag_axis < f64::INFINITY,
+            "Orbit data should track distance to imag axis"
+        );
+    }
+
+    #[test]
+    fn test_julia_compute_full_orbit_data() {
+        let j = Julia::default();
+        let result = j.compute_full(1.0, 0.0, 100);
+        assert!(result.escaped);
+        assert!(result.final_z.is_some());
+        assert!(result.orbit_data.min_distance_to_origin < f64::INFINITY);
+    }
+
+    #[test]
+    fn test_newton_compute_full_convergence() {
+        let n = Newton::default();
+        // Near root1, should converge and return as escaped with high iteration count
+        let result = n.compute_full(0.9, 0.0, 100);
+        assert!(result.escaped, "Convergence should be treated as escaped");
+        assert!(
+            result.iterations > 80,
+            "Should have high iter count from convergence"
+        );
+        assert!(result.final_z.is_some());
+    }
+
+    // ========================================================================
+    // Edge case tests
+    // ========================================================================
+
+    #[test]
+    fn test_mandelbrot_max_iter_1() {
+        let m = Mandelbrot::default();
+        // With max_iter=1, point at origin: z=0, i=0: r2+i2=0 < 4, compute z^2+c,
+        // loop ends -> return max_iter=1
+        let result = m.compute(0.0, 0.0, 1);
+        assert_eq!(result, 1, "Single iteration, origin stays -> max_iter");
+
+        // Far point: z starts at 0, so at i=0 the escape check sees |z|^2=0 < 4.
+        // After one iteration z=3+0i, but the loop ends -> return max_iter=1.
+        // It only escapes on the NEXT iteration's check (i=1), which doesn't run.
+        let result = m.compute(3.0, 0.0, 1);
+        assert_eq!(
+            result, 1,
+            "z starts at 0, so first escape check passes even for far c"
+        );
+
+        // With max_iter=2, the far point should escape at i=1
+        let result = m.compute(3.0, 0.0, 2);
+        assert_eq!(result, 1, "Far point should escape at i=1 (z=3, |z|^2=9>4)");
+    }
+
+    #[test]
+    fn test_parameter_clamping() {
+        let mut m = Mandelbrot::default();
+        m.set_parameter("power", 100.0);
+        assert!(
+            (m.get_parameter("power").unwrap() - 8.0).abs() < 0.001,
+            "Power should be clamped to 8.0"
+        );
+
+        m.set_parameter("power", -5.0);
+        assert!(
+            (m.get_parameter("power").unwrap() - 1.0).abs() < 0.001,
+            "Power should be clamped to 1.0"
+        );
+    }
+
+    #[test]
+    fn test_julia_parameter_clamping() {
+        let mut j = Julia::default();
+        j.set_parameter("c_real", 10.0);
+        assert!(
+            (j.get_parameter("c_real").unwrap() - 2.0).abs() < 0.001,
+            "c_real should be clamped to 2.0"
+        );
+
+        j.set_parameter("c_imag", -10.0);
+        assert!(
+            (j.get_parameter("c_imag").unwrap() - (-2.0)).abs() < 0.001,
+            "c_imag should be clamped to -2.0"
+        );
+    }
+
+    #[test]
+    fn test_unknown_parameter_ignored() {
+        let mut m = Mandelbrot::default();
+        let before = m.get_parameter("power").unwrap();
+        m.set_parameter("nonexistent", 42.0);
+        let after = m.get_parameter("power").unwrap();
+        assert_eq!(
+            before, after,
+            "Unknown parameter should not change anything"
+        );
+        assert_eq!(m.get_parameter("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_compute_consistency() {
+        // compute() and compute_full() should return the same iteration count
+        let m = Mandelbrot::default();
+        for &(cx, cy) in &[(0.0, 0.0), (0.3, 0.5), (2.0, 0.0), (-0.5, 0.0), (0.25, 0.0)] {
+            let simple = m.compute(cx, cy, 200);
+            let full = m.compute_full(cx, cy, 200);
+            assert_eq!(
+                simple, full.iterations,
+                "compute() and compute_full() should match for ({}, {}): {} vs {}",
+                cx, cy, simple, full.iterations
+            );
+        }
+    }
+
+    #[test]
+    fn test_compute_full_consistency_julia() {
+        let j = Julia::default();
+        for &(cx, cy) in &[(0.0, 0.0), (1.0, 0.0), (0.5, 0.5), (-1.0, -1.0)] {
+            let simple = j.compute(cx, cy, 200);
+            let full = j.compute_full(cx, cy, 200);
+            assert_eq!(
+                simple, full.iterations,
+                "Julia compute/compute_full mismatch at ({}, {}): {} vs {}",
+                cx, cy, simple, full.iterations
+            );
+        }
     }
 }

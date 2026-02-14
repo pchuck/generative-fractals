@@ -85,6 +85,10 @@ struct Bookmark {
     zoom: f64,
     max_iterations: u32,
     palette_type: PaletteType,
+    #[serde(default)]
+    color_processor_type: color_pipeline::ColorProcessorType,
+    #[serde(default)]
+    fractal_params: HashMap<String, f64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -484,6 +488,45 @@ impl FractalApp {
         self.set_status("Settings reset".to_string());
     }
 
+    /// Zoom centered on a specific screen point (for scroll-wheel zoom)
+    fn zoom_at_point(
+        &mut self,
+        factor: f64,
+        screen_x: u32,
+        screen_y: u32,
+        width: u32,
+        height: u32,
+    ) {
+        let old_view = self.get_view();
+
+        // Convert the focus point to fractal coordinates before zoom
+        let focus = self
+            .viewport
+            .screen_to_world(screen_x, screen_y, width, height);
+
+        let mut view = old_view.clone();
+        view.zoom *= factor;
+
+        // Adjust center so the focus point stays under the cursor
+        // Before zoom: focus_world = center + offset/zoom_old
+        // After zoom: we want focus_world at the same screen position
+        // new_center = focus_world - offset/zoom_new = focus_world - (focus_world - old_center)*(zoom_old/zoom_new)
+        let ratio = 1.0 / factor;
+        view.center_x = focus.re - (focus.re - old_view.center_x) * ratio;
+        view.center_y = focus.im - (focus.im - old_view.center_y) * ratio;
+
+        if self.adaptive_iterations {
+            let new_iter = self.calculate_adaptive_iterations(view.zoom);
+            view.max_iterations = new_iter;
+            self.controls.max_iterations = new_iter;
+            self.controls.pending_max_iterations = new_iter;
+        }
+
+        self.set_view(view.clone());
+        self.execute_view_command(&old_view, &view);
+        self.invalidate_cache();
+    }
+
     fn zoom_view(&mut self, factor: f64) {
         let old_view = self.get_view();
         let mut view = old_view.clone();
@@ -563,6 +606,8 @@ impl FractalApp {
             zoom: view.zoom,
             max_iterations: view.max_iterations,
             palette_type: view.palette_type,
+            color_processor_type: view.color_processor_type,
+            fractal_params: view.fractal_params.clone(),
         };
         self.bookmarks.push(bookmark);
         self.set_status("Bookmark saved".to_string());
@@ -580,20 +625,27 @@ impl FractalApp {
             self.controls.fractal_type = bookmark.fractal_type;
             self.fractal = self.create_fractal(bookmark.fractal_type);
 
+            // Restore fractal parameters
+            for (name, value) in &bookmark.fractal_params {
+                self.fractal.set_parameter(name, *value);
+            }
+
             let view = FractalViewState {
                 center_x: bookmark.center_x,
                 center_y: bookmark.center_y,
                 zoom: bookmark.zoom,
                 max_iterations: bookmark.max_iterations,
-                fractal_params: HashMap::new(),
+                fractal_params: bookmark.fractal_params.clone(),
                 palette_type: bookmark.palette_type,
-                color_processor_type: color_pipeline::ColorProcessorType::default(),
+                color_processor_type: bookmark.color_processor_type,
             };
             self.set_view(view);
 
             self.controls.max_iterations = bookmark.max_iterations;
             self.controls.pending_max_iterations = bookmark.max_iterations;
             self.controls.palette_type = bookmark.palette_type;
+            self.controls.color_processor_type = bookmark.color_processor_type;
+            self.controls.pending_fractal_params = bookmark.fractal_params.clone();
 
             self.invalidate_cache();
             self.set_status(format!("Loaded: {}", bookmark.name));
@@ -918,20 +970,28 @@ impl eframe::App for FractalApp {
                 }
 
                 if !self.bookmarks.is_empty() {
+                    let mut load_index = None;
+                    let mut delete_index = None;
                     egui::ScrollArea::vertical()
                         .max_height(150.0)
                         .show(ui, |ui| {
-                            for (i, bookmark) in self.bookmarks.clone().iter().enumerate() {
+                            for i in 0..self.bookmarks.len() {
                                 ui.horizontal(|ui| {
-                                    if ui.button(&bookmark.name).clicked() {
-                                        self.load_bookmark(i);
+                                    if ui.button(&self.bookmarks[i].name).clicked() {
+                                        load_index = Some(i);
                                     }
                                     if ui.button("×").clicked() {
-                                        self.delete_bookmark(i);
+                                        delete_index = Some(i);
                                     }
                                 });
                             }
                         });
+                    if let Some(i) = load_index {
+                        self.load_bookmark(i);
+                    }
+                    if let Some(i) = delete_index {
+                        self.delete_bookmark(i);
+                    }
                 }
 
                 if self.drag_start.is_some() {
@@ -1042,6 +1102,25 @@ impl eframe::App for FractalApp {
                 self.update_mouse_position(pos, &rect);
             } else {
                 self.mouse_fractal_pos = None;
+            }
+
+            // Scroll-wheel zoom at cursor position
+            if response.hovered() {
+                let scroll_delta = ctx.input(|i| i.smooth_scroll_delta.y);
+                if scroll_delta.abs() > 0.1 {
+                    if let Some(pos) = pointer_pos {
+                        let sx = (pos.x - rect.min.x) as u32;
+                        let sy = (pos.y - rect.min.y) as u32;
+                        if sx < width && sy < height {
+                            let factor = if scroll_delta > 0.0 {
+                                1.0 + scroll_delta as f64 * 0.01
+                            } else {
+                                1.0 / (1.0 + (-scroll_delta) as f64 * 0.01)
+                            };
+                            self.zoom_at_point(factor, sx, sy, width, height);
+                        }
+                    }
+                }
             }
 
             if response.drag_started() {

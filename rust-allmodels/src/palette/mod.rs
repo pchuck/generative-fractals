@@ -219,3 +219,163 @@ pub fn get_color(palette_type: PaletteType, t: f32, offset: f32) -> Color32 {
             .color(adjusted_t),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_classic_palette_endpoints() {
+        let p = ClassicPalette;
+        // t=0.0 should be black (or near-black)
+        let c0 = p.color(0.0);
+        assert_eq!(c0.r(), 0);
+        assert_eq!(c0.g(), 0);
+        assert_eq!(c0.b(), 0);
+
+        // t=1.0 should be white
+        let c1 = p.color(1.0);
+        assert_eq!(c1.r(), 255);
+        assert_eq!(c1.g(), 255);
+        assert_eq!(c1.b(), 255);
+    }
+
+    #[test]
+    fn test_fire_palette_endpoints() {
+        let p = FirePalette;
+        let c0 = p.color(0.0);
+        assert_eq!(c0.r(), 0);
+        assert_eq!(c0.g(), 0);
+        assert_eq!(c0.b(), 0);
+
+        let c1 = p.color(1.0);
+        assert_eq!(c1.r(), 255);
+        assert_eq!(c1.g(), 255);
+        assert_eq!(c1.b(), 255);
+    }
+
+    #[test]
+    fn test_ice_palette_endpoints() {
+        let p = IcePalette;
+        let c0 = p.color(0.0);
+        assert_eq!(c0.r(), 0);
+
+        let c1 = p.color(1.0);
+        assert_eq!(c1.r(), 255);
+        assert_eq!(c1.g(), 255);
+        assert_eq!(c1.b(), 255);
+    }
+
+    #[test]
+    fn test_grayscale_palette() {
+        let p = GrayscalePalette;
+        let c0 = p.color(0.0);
+        assert_eq!(c0.r(), 0);
+        assert_eq!(c0.g(), 0);
+        assert_eq!(c0.b(), 0);
+
+        let c1 = p.color(1.0);
+        assert_eq!(c1.r(), 255);
+        assert_eq!(c1.g(), 255);
+        assert_eq!(c1.b(), 255);
+
+        // Midpoint should be ~127
+        let mid = p.color(0.5);
+        assert!((mid.r() as i32 - 127).abs() <= 1);
+    }
+
+    #[test]
+    fn test_psychedelic_palette_not_black() {
+        let p = PsychedelicPalette;
+        // At t=0 with HSV: h=0 (red), s=1, v=0.5 -> should be dark red
+        let c = p.color(0.0);
+        assert!(c.r() > 0 || c.g() > 0 || c.b() > 0, "Should not be black");
+    }
+
+    #[test]
+    fn test_interpolate_monotonic() {
+        // Classic palette should produce smoothly varying colors
+        let p = ClassicPalette;
+        let mut prev_total = 0u32;
+        let mut non_monotonic_count = 0;
+
+        for i in 0..=100 {
+            let t = i as f32 / 100.0;
+            let c = p.color(t);
+            let total = c.r() as u32 + c.g() as u32 + c.b() as u32;
+            // Allow some non-monotonicity (color space traversal)
+            // but overall brightness should trend upward
+            if total < prev_total && prev_total - total > 50 {
+                non_monotonic_count += 1;
+            }
+            prev_total = total;
+        }
+        // There should be at most a couple of dips in the rainbow
+        assert!(
+            non_monotonic_count <= 3,
+            "Too many large brightness drops: {}",
+            non_monotonic_count
+        );
+    }
+
+    #[test]
+    fn test_get_color_all_palettes() {
+        // Every palette should return a valid color for any t in [0, 1]
+        for palette in [
+            PaletteType::Classic,
+            PaletteType::Fire,
+            PaletteType::Ice,
+            PaletteType::Grayscale,
+            PaletteType::Psychedelic,
+        ] {
+            for i in 0..=10 {
+                let t = i as f32 / 10.0;
+                let c = get_color(palette, t, 0.0);
+                // Just verify we get a color without panicking
+                let _ = c.r();
+                let _ = c.g();
+                let _ = c.b();
+            }
+        }
+    }
+
+    #[test]
+    fn test_psychedelic_offset() {
+        // Different offsets should produce different colors
+        let c1 = get_color(PaletteType::Psychedelic, 0.5, 0.0);
+        let c2 = get_color(PaletteType::Psychedelic, 0.5, 0.5);
+        assert_ne!(c1, c2, "Different offsets should produce different colors");
+    }
+
+    #[test]
+    fn test_hsv_to_rgb_red() {
+        let (r, g, b) = hsv_to_rgb(0.0, 1.0, 1.0);
+        assert!((r - 1.0).abs() < 0.01);
+        assert!(g.abs() < 0.01);
+        assert!(b.abs() < 0.01);
+    }
+
+    #[test]
+    fn test_hsv_to_rgb_green() {
+        let (r, g, b) = hsv_to_rgb(1.0 / 3.0, 1.0, 1.0);
+        assert!(r.abs() < 0.01);
+        assert!((g - 1.0).abs() < 0.01);
+        assert!(b.abs() < 0.01);
+    }
+
+    #[test]
+    fn test_hsv_to_rgb_blue() {
+        let (r, g, b) = hsv_to_rgb(2.0 / 3.0, 1.0, 1.0);
+        assert!(r.abs() < 0.01);
+        assert!(g.abs() < 0.01);
+        assert!((b - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_hsv_to_rgb_white() {
+        let (r, g, b) = hsv_to_rgb(0.0, 0.0, 1.0);
+        assert!((r - 1.0).abs() < 0.01);
+        assert!((g - 1.0).abs() < 0.01);
+        assert!((b - 1.0).abs() < 0.01);
+    }
+}
