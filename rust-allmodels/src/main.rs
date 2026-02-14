@@ -127,6 +127,7 @@ struct FractalApp {
     bookmark_name_input: String,
     minimap_enabled: bool,
     export_scale: u32,
+    show_about_dialog: bool,
     // Rendering engine
     render_engine: RenderEngine,
     // Current render configuration
@@ -225,6 +226,7 @@ impl FractalApp {
             bookmark_name_input: String::new(),
             minimap_enabled: false,
             export_scale: 1,
+            show_about_dialog: false,
             render_engine: RenderEngine::default(),
             render_config: None,
             partial_render_regions: Vec::new(),
@@ -1026,7 +1028,54 @@ impl eframe::App for FractalApp {
                 ui.label("Ctrl+Z : Undo");
                 ui.label("Ctrl+Y : Redo");
                 ui.label("S : Save image");
+
+                ui.separator();
+                if ui.button("About").clicked() {
+                    self.show_about_dialog = true;
+                }
             });
+
+        // About dialog
+        if self.show_about_dialog {
+            egui::Window::new("About")
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    // Load and display the image at 1/2 size (452x392)
+                    let image_path = "images/mandelbrot_grayscale_904x784.png";
+                    if let Ok(image_data) = std::fs::read(image_path) {
+                        if let Ok(image) = image::load_from_memory(&image_data) {
+                            let rgba = image.to_rgba8();
+                            let size = [image.width() as _, image.height() as _];
+                            let pixels: Vec<egui::Color32> = rgba
+                                .pixels()
+                                .map(|p| {
+                                    egui::Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3])
+                                })
+                                .collect();
+                            let color_image = egui::ColorImage { size, pixels };
+                            let texture = ui.ctx().load_texture(
+                                "about_image",
+                                color_image,
+                                egui::TextureOptions::default(),
+                            );
+                            // Display at 1/2 size
+                            ui.image((texture.id(), egui::vec2(452.0, 392.0)));
+                        } else {
+                            ui.label("Failed to load image");
+                        }
+                    } else {
+                        ui.label("Image not found");
+                    }
+
+                    ui.separator();
+                    ui.label("Fractal Explorer\n(c)2026 ultrametrics.net");
+
+                    if ui.button("Close").clicked() {
+                        self.show_about_dialog = false;
+                    }
+                });
+        }
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let rect = ui.max_rect();
