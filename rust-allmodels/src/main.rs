@@ -9,11 +9,13 @@ mod fractal;
 mod palette;
 mod renderer;
 mod ui;
+mod viewport;
 
-use fractal::{create_fractal, Fractal, FractalType};
+use fractal::{registry::FractalRegistry, Fractal, FractalType};
 use palette::PaletteType;
-use renderer::{screen_to_fractal, RenderConfig, RenderEngine, RenderRegion};
+use renderer::{RenderConfig, RenderEngine, RenderRegion};
 use ui::FractalControls;
+use viewport::Viewport;
 
 /// Application configuration for persistence
 #[derive(Serialize, Deserialize, Clone)]
@@ -206,6 +208,10 @@ struct FractalApp {
     partial_render_regions: Vec<RenderRegion>,
     current_region_index: usize,
     render_chunk_start: u32,
+    // Fractal registry for creating fractals
+    fractal_registry: FractalRegistry,
+    // Viewport for coordinate transformations
+    viewport: Viewport,
 }
 
 struct ZoomPreview {
@@ -215,33 +221,24 @@ struct ZoomPreview {
 
 impl FractalApp {
     fn new(config: &AppConfig) -> Self {
+        let registry = FractalRegistry::default();
         let mut views = HashMap::new();
-        for ft in [
-            FractalType::Mandelbrot,
-            FractalType::Julia,
-            FractalType::BurningShip,
-            FractalType::Tricorn,
-            FractalType::Celtic,
-            FractalType::Newton,
-            FractalType::Biomorph,
-            FractalType::Phoenix,
-            FractalType::Multibrot,
-            FractalType::Spider,
-            FractalType::OrbitTrap,
-            FractalType::PickoverStalk,
-        ] {
-            let (cx, cy) = ft.default_center();
-            views.insert(
-                ft,
-                FractalViewState {
-                    center_x: cx,
-                    center_y: cy,
-                    zoom: 1.0,
-                    max_iterations: config.default_iterations,
-                    fractal_params: HashMap::new(),
-                    palette_type: config.default_palette,
-                },
-            );
+
+        // Initialize views from registry metadata
+        for ft in registry.all_types() {
+            if let Some(metadata) = registry.metadata(ft) {
+                views.insert(
+                    ft,
+                    FractalViewState {
+                        center_x: metadata.default_center.0,
+                        center_y: metadata.default_center.1,
+                        zoom: metadata.default_zoom,
+                        max_iterations: config.default_iterations,
+                        fractal_params: HashMap::new(),
+                        palette_type: config.default_palette,
+                    },
+                );
+            }
         }
 
         let controls = FractalControls {
@@ -252,8 +249,12 @@ impl FractalApp {
             ..Default::default()
         };
 
+        let fractal = registry
+            .create(config.default_fractal)
+            .expect("Default fractal should be registered");
+
         let mut app = FractalApp {
-            fractal: create_fractal(config.default_fractal),
+            fractal,
             controls,
             views,
             drag_start: None,
@@ -284,6 +285,12 @@ impl FractalApp {
             partial_render_regions: Vec::new(),
             current_region_index: 0,
             render_chunk_start: 0,
+            fractal_registry: registry,
+            viewport: Viewport::new(
+                config.default_fractal.default_center().0,
+                config.default_fractal.default_center().1,
+                1.0,
+            ),
         };
 
         // Push initial view to history
@@ -291,6 +298,13 @@ impl FractalApp {
         app.view_history.push(config.default_fractal, initial_view);
 
         app
+    }
+
+    /// Helper method to create a fractal using the registry
+    fn create_fractal(&self, fractal_type: FractalType) -> Box<dyn Fractal> {
+        self.fractal_registry
+            .create(fractal_type)
+            .expect("Fractal should be registered")
     }
 
     fn get_view(&self) -> FractalViewState {
@@ -301,7 +315,20 @@ impl FractalApp {
     }
 
     fn set_view(&mut self, view: FractalViewState) {
-        self.views.insert(self.controls.fractal_type, view);
+        self.views.insert(self.controls.fractal_type, view.clone());
+        // Sync viewport with the new view
+        self.viewport = Viewport::from_view(
+            view.center_x,
+            view.center_y,
+            view.zoom,
+            self.cached_width.max(1),
+            self.cached_height.max(1),
+        );
+    }
+
+    /// Update viewport dimensions (call when window resizes)
+    fn update_viewport_dimensions(&mut self, width: u32, height: u32) {
+        self.viewport.set_dimensions(width, height);
     }
 
     /// Invalidate the render cache and request a full re-render.
@@ -475,7 +502,7 @@ impl FractalApp {
         self.controls.palette_offset = 0.0;
 
         // Reset fractal parameters to defaults
-        self.fractal = create_fractal(self.controls.fractal_type);
+        self.fractal = self.create_fractal(self.controls.fractal_type);
         self.controls.pending_fractal_params.clear();
 
         self.invalidate_cache();
@@ -527,7 +554,7 @@ impl FractalApp {
     fn undo(&mut self) {
         if let Some((fractal_type, view)) = self.view_history.undo() {
             self.controls.fractal_type = fractal_type;
-            self.fractal = create_fractal(fractal_type);
+            self.fractal = self.create_fractal(fractal_type);
             self.views.insert(fractal_type, view);
             self.invalidate_cache();
             self.set_status("Undo".to_string());
@@ -537,7 +564,7 @@ impl FractalApp {
     fn redo(&mut self) {
         if let Some((fractal_type, view)) = self.view_history.redo() {
             self.controls.fractal_type = fractal_type;
-            self.fractal = create_fractal(fractal_type);
+            self.fractal = self.create_fractal(fractal_type);
             self.views.insert(fractal_type, view);
             self.invalidate_cache();
             self.set_status("Redo".to_string());
@@ -570,7 +597,7 @@ impl FractalApp {
         if let Some(bookmark) = self.bookmarks.get(index).cloned() {
             self.save_view_to_history();
             self.controls.fractal_type = bookmark.fractal_type;
-            self.fractal = create_fractal(bookmark.fractal_type);
+            self.fractal = self.create_fractal(bookmark.fractal_type);
 
             let view = FractalViewState {
                 center_x: bookmark.center_x,
@@ -606,14 +633,13 @@ impl FractalApp {
     fn update_mouse_position(&mut self, pos: egui::Pos2, rect: &egui::Rect) {
         let width = rect.width() as u32;
         let height = rect.height() as u32;
-        let view = self.get_view();
 
         let x = (pos.x - rect.min.x) as u32;
         let y = (pos.y - rect.min.y) as u32;
 
         if x < width && y < height {
-            let (fx, fy) = screen_to_fractal(x, y, width, height, &view);
-            self.mouse_fractal_pos = Some((fx, fy));
+            let world = self.viewport.screen_to_world(x, y, width, height);
+            self.mouse_fractal_pos = Some((world.re, world.im));
         } else {
             self.mouse_fractal_pos = None;
         }
@@ -628,35 +654,31 @@ impl FractalApp {
         let mut pixels = vec![egui::Color32::BLACK; minimap_size * minimap_size];
 
         // Render a simplified version of the fractal
-        let view = self.get_view();
         let max_iter = 50; // Low quality for speed
 
-        // For the minimap, we show the full fractal at zoom level 1
-        // with a rectangle showing current view
-        let minimap_view = FractalViewState {
-            center_x: self.controls.fractal_type.default_center().0,
-            center_y: self.controls.fractal_type.default_center().1,
-            zoom: 1.0,
-            max_iterations: max_iter,
-            fractal_params: view.fractal_params.clone(),
-            palette_type: view.palette_type,
-        };
+        // Create a viewport for the minimap showing the full fractal at zoom level 1
+        let minimap_viewport = Viewport::from_view(
+            self.controls.fractal_type.default_center().0,
+            self.controls.fractal_type.default_center().1,
+            1.0,
+            minimap_size as u32,
+            minimap_size as u32,
+        );
 
         for y in 0..minimap_size {
             for x in 0..minimap_size {
-                let (px, py) = screen_to_fractal(
+                let world = minimap_viewport.screen_to_world(
                     x as u32,
                     y as u32,
                     minimap_size as u32,
                     minimap_size as u32,
-                    &minimap_view,
                 );
-                let iterations = self.fractal.compute(px, py, max_iter);
+                let iterations = self.fractal.compute(world.re, world.im, max_iter);
                 let color = if iterations >= max_iter {
                     egui::Color32::BLACK
                 } else {
                     let t = iterations as f32 / max_iter as f32;
-                    palette::get_color(view.palette_type, t, 0.0)
+                    palette::get_color(self.controls.palette_type, t, 0.0)
                 };
                 pixels[y * minimap_size + x] = color;
             }
@@ -665,13 +687,15 @@ impl FractalApp {
         // Draw view rectangle
         // Calculate where the current view would be on the minimap
         let default_center = self.controls.fractal_type.default_center();
-        let view_width = 4.0 / view.zoom; // Width in fractal coordinates
+        let (view_center_x, view_center_y) = self.viewport.center();
+        let view_zoom = self.viewport.zoom();
+        let view_width = 4.0 / view_zoom; // Width in fractal coordinates
         let view_height = view_width; // Square aspect
 
         // Map view center to minimap coordinates
         let map_range = 4.0; // Minimap shows -2 to 2 range
-        let rel_x = (view.center_x - default_center.0 + map_range / 2.0) / map_range;
-        let rel_y = (view.center_y - default_center.1 + map_range / 2.0) / map_range;
+        let rel_x = (view_center_x - default_center.0 + map_range / 2.0) / map_range;
+        let rel_y = (view_center_y - default_center.1 + map_range / 2.0) / map_range;
 
         let rect_x = (rel_x * minimap_size as f64) as i32;
         let rect_y = (rel_y * minimap_size as f64) as i32;
@@ -766,7 +790,7 @@ impl eframe::App for FractalApp {
                 self.controls.ui(ui, &mut self.fractal, &mut changed);
 
                 if prev_fractal != self.controls.fractal_type {
-                    self.fractal = create_fractal(self.controls.fractal_type);
+                    self.fractal = self.create_fractal(self.controls.fractal_type);
                     if let Some(view) = self.views.get(&self.controls.fractal_type) {
                         self.controls.max_iterations = view.max_iterations;
                         self.controls.pending_max_iterations = view.max_iterations;
@@ -988,6 +1012,11 @@ impl eframe::App for FractalApp {
                 return;
             }
 
+            // Update viewport dimensions if changed
+            if width != self.cached_width || height != self.cached_height {
+                self.update_viewport_dimensions(width, height);
+            }
+
             let response =
                 ui.interact(rect, egui::Id::new("canvas"), egui::Sense::click_and_drag());
 
@@ -1036,13 +1065,21 @@ impl eframe::App for FractalApp {
 
                         let view = self.get_view();
 
-                        let (fractal_min_x, fractal_max_y) =
-                            screen_to_fractal(min_x as u32, max_y as u32, width, height, &view);
-                        let (fractal_max_x, fractal_min_y) =
-                            screen_to_fractal(max_x as u32, min_y as u32, width, height, &view);
+                        let tl = self.viewport.screen_to_world(
+                            min_x as u32,
+                            min_y as u32,
+                            width,
+                            height,
+                        );
+                        let br = self.viewport.screen_to_world(
+                            max_x as u32,
+                            max_y as u32,
+                            width,
+                            height,
+                        );
 
-                        let new_center_x = (fractal_min_x + fractal_max_x) / 2.0;
-                        let new_center_y = (fractal_min_y + fractal_max_y) / 2.0;
+                        let new_center_x = (tl.re + br.re) / 2.0;
+                        let new_center_y = (tl.im + br.im) / 2.0;
 
                         let sel_height_px = max_y - min_y;
                         let new_zoom = view.zoom * (height as f64 / sel_height_px as f64);

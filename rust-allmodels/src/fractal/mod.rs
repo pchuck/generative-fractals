@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub mod registry;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum FractalType {
     #[default]
@@ -1141,24 +1143,6 @@ impl Fractal for PickoverStalk {
 
         // Point is in set - return max_iter
         max_iter
-    }
-}
-
-/// Factory function to create fractal instances.
-pub fn create_fractal(fractal_type: FractalType) -> Box<dyn Fractal> {
-    match fractal_type {
-        FractalType::Mandelbrot => Box::new(Mandelbrot::default()),
-        FractalType::Julia => Box::new(Julia::default()),
-        FractalType::BurningShip => Box::new(BurningShip::default()),
-        FractalType::Tricorn => Box::new(Tricorn::default()),
-        FractalType::Celtic => Box::new(Celtic::default()),
-        FractalType::Newton => Box::new(Newton::default()),
-        FractalType::Biomorph => Box::new(Biomorph::default()),
-        FractalType::Phoenix => Box::new(Phoenix::default()),
-        FractalType::Multibrot => Box::new(Multibrot::default()),
-        FractalType::Spider => Box::new(Spider::default()),
-        FractalType::OrbitTrap => Box::new(OrbitTrap::default()),
-        FractalType::PickoverStalk => Box::new(PickoverStalk::default()),
     }
 }
 

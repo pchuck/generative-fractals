@@ -460,17 +460,6 @@ mod tests {
         }
     }
 
-    fn test_config() -> RenderConfig {
-        RenderConfig {
-            width: 100,
-            height: 100,
-            supersampling: false,
-            max_iterations: 100,
-            palette_type: PaletteType::Classic,
-            palette_offset: 0.0,
-        }
-    }
-
     #[test]
     fn test_render_config_dimensions() {
         let config_normal = RenderConfig {
