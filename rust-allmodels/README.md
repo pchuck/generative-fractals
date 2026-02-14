@@ -11,24 +11,25 @@ Interactive fractal explorer built with Rust, eframe/egui, and Rayon for paralle
 - **Julia** - Julia set with customizable c_real, c_imag parameters  
 - **Burning Ship** - Iterated with absolute values
 - **Tricorn** - Also known as Mandelbar (conjugated iteration)
-- **Celtic** - Variant with absolute value on real component
-- **Newton** - Newton's method visualization for z³ - 1 = 0
-- **Biomorph** - Modified Newton with escape conditions (biological patterns)
-- **Phoenix** - Julia variant with memory term creating flame-like patterns
-- **Multibrot** - Mandelbrot with arbitrary power (3+ gives more lobes)
-- **Spider** - Alternating Mandelbrot creating spiderweb patterns
-- **Orbit Trap** - Mandelbrot variant tracking minimum distance to a trap point
+- **Celtic** - Variant with absolute value on real component of z^2
+- **Newton** - Newton's method visualization for z^3 - 1 = 0
+- **Biomorph** - Classical Pickover biomorph (z^n+c with |Re|/|Im| escape test)
+- **Phoenix** - Ushiki Phoenix with memory term (c=0.5667, p=-0.5)
+- **Multibrot** - Mandelbrot generalized to arbitrary power (delegates to Mandelbrot engine)
+- **Spider** - Classical Spider with evolving c parameter (z=z^2+c, c=c/2+z)
+- **Orbit Trap** - Mandelbrot variant tracking minimum distance to a trap point (default: origin)
 - **Pickover Stalk** - Mandelbrot variant creating organic stalk patterns near axes
 
 ### Color Palettes (5)
-- **Classic** - Rainbow gradient (black → blue → cyan → green → yellow → red → white)
-- **Fire** - Heat map (black → red → orange → yellow → white)
-- **Ice** - Cold tones (black → blue → cyan → white)
+- **Classic** - Rainbow gradient (black -> blue -> cyan -> green -> yellow -> red -> white)
+- **Fire** - Heat map (black -> red -> orange -> yellow -> white)
+- **Ice** - Cold tones (black -> blue -> cyan -> white)
 - **Grayscale** - Black to white gradient
 - **Psychedelic** - HSV cycling with adjustable offset
 
 ### Color Processors (5)
-Color processors transform fractal iteration data into colors using different algorithms:
+Color processors transform fractal iteration data into colors using different algorithms.
+All processors receive full orbit data (final_z, orbit distances) via `compute_full()`:
 - **Standard Palette** - Direct palette mapping based on iteration count
 - **Smooth Coloring** - Continuous coloring using logarithmic smoothing for gradient bands
 - **Orbit Trap (Real Axis)** - Traps orbits near the real axis (y=0) for stalk-like patterns
@@ -37,7 +38,7 @@ Color processors transform fractal iteration data into colors using different al
 
 ### Interactive Controls
 - **Click + Drag** - Select zoom region
-- **Mouse Wheel** - Zoom in/out at cursor position
+- **Mouse Wheel** - Zoom in/out at cursor position (focus-preserving)
 - **Arrow Keys** - Pan view with pixel reuse optimization (reuses ~87.5% of rendered pixels)
 - **+ / -** - Zoom in/out by 1.5x
 - **R** - Reset view to defaults
@@ -52,24 +53,27 @@ Color processors transform fractal iteration data into colors using different al
 - **Progress Bar** - Shows rendering progress for large images
 - **Render Status** - Displays "Parallel: X threads" and "Last render: 450ms" next to Fractal Type
 - **Supersampling** - 2x supersampling for smoother edges (toggle in UI)
-- **Mini-map** - Small overview showing full fractal with current view rectangle
+- **Mini-map** - Small overview showing full fractal with current view rectangle (cached, only re-rendered on changes)
 - **Pan Optimization** - When panning with arrow keys, existing pixels are shifted and only new edge strips are recalculated (~87.5% performance improvement)
-- **About Dialog** - Shows App info with image and copyright
+- **Texture Caching** - GPU texture only recreated when the image actually changes (not every frame)
+- **About Dialog** - Shows App info with cached image and copyright
 
 ### State Management
 - **Per-Fractal State** - Each fractal remembers its view position, zoom, iterations, palette, color processor, and parameters
-- **Per-Fractal Undo/Redo** - Separate 50-step command history for each fractal type (view changes, parameters, palette, color processor, iterations are all tracked independently per fractal)
-- **Bookmarks** - Save interesting locations with names, including position, zoom, iterations, palette, and color processor
-- **Configuration File** - Saves window size, defaults, bookmarks, and settings to `~/.config/fractal-explorer/config.json`
+- **Per-Fractal Undo/Redo** - Separate 50-step command history for each fractal type
+- **Bookmarks** - Save interesting locations with names, including position, zoom, iterations, palette, color processor, and all fractal parameters
+- **Configuration File** - Saves actual window size, defaults, bookmarks, and settings to `~/.config/fractal-explorer/config.json`
 
 ### Smart Features
 - **Adaptive Iterations** - Automatically increases max iterations as you zoom (prevents loss of detail at deep zoom levels)
 - **Anti-Aliasing** - Supersampling option for smoother edges
 - **Efficient Panning** - Arrow key panning reuses existing pixel data, only rendering new edge regions
+- **Power=2 Fast Path** - All De Moivre-based fractals use direct algebraic formula when power=2 (3-5x faster)
 
 ### Export Options
 - **Save (S) with Radio Buttons** - Select 1x, 2x, or 4x resolution, then click Save
 - **High Resolution** - 2x and 4x renders at higher resolution for better quality
+- **Color Processor** - Exports use the current color processor (not just palette)
 - **Supersampling** - 2x internal render with box filter downsampling
 - All exports saved to `images/` directory with auto-generated filenames
 
@@ -166,14 +170,15 @@ make dist-windows
 ## Parameters
 
 ### Fractal-Specific
-- **Power** (Mandelbrot, Burning Ship, Tricorn, Celtic, Multibrot, Spider) - Exponent value (1.0-10.0)
+- **Power** (Mandelbrot, Burning Ship, Tricorn, Celtic, Multibrot) - Exponent value (1.0-10.0)
 - **c_real / c_imag** (Julia, Phoenix) - Fractal constant (-2.0 to 2.0)
-- **Memory** (Phoenix) - Memory parameter creating flame effects (-1.0 to 1.0), default 0.55
-- **Default Phoenix**: c_real=0.0, c_imag=0.4, memory=0.55, iterations=100
-- **Escape Radius** (Newton, Biomorph) - Convergence threshold (4.0-64.0)
-- **Tolerance** (Newton, Biomorph) - Root detection sensitivity (0.0001-0.1)
-- **trap_x / trap_y** (Orbit Trap) - Trap point coordinates (-2.0 to 2.0)
+- **Memory** (Phoenix) - Memory coefficient creating phoenix patterns (-1.0 to 1.0), default -0.5
+- **Default Phoenix**: c_real=0.5667, c_imag=0.0, memory=-0.5 (classic Ushiki Phoenix)
+- **Power / Escape Radius** (Biomorph) - Power (2.0-8.0, default 3.0) and biomorph escape test radius (2.0-100.0, default 10.0)
+- **Tolerance** (Newton) - Root detection sensitivity (0.0001-0.1)
+- **trap_x / trap_y** (Orbit Trap) - Trap point coordinates (-2.0 to 2.0), default origin (0, 0)
 - **thickness / intensity** (Pickover Stalk) - Stalk thickness (0.01-1.0) and intensity (1.0-100.0)
+- **Spider** - No parameters (uses classical z=z^2+c, c=c/2+z algorithm)
 
 ### Global
 - **Iterations** - Maximum iteration count (16-2000)
@@ -185,8 +190,8 @@ make dist-windows
 
 Save interesting locations for later:
 - Click "Bookmark" button to save current view
-- Each bookmark saves: name, fractal type, position, zoom, iterations, palette
-- Click bookmark name to restore that view
+- Each bookmark saves: name, fractal type, position, zoom, iterations, palette, color processor, and all fractal parameters
+- Click bookmark name to restore that view (including fractal-specific params like Julia c values)
 - Bookmarks persist across sessions in config file
 
 ## Configuration
@@ -197,48 +202,47 @@ Settings are automatically saved to:
 - **Windows**: `%APPDATA%\fractal-explorer\config.json`
 
 Saved settings include:
-- Window size and position
+- Actual window size (tracked each frame, saved on exit)
 - Default fractal type and palette
 - Default iteration count
 - Supersampling preference
 - Adaptive iterations setting
-- All bookmarks
+- All bookmarks (with full fractal state)
 
 ## Architecture
 
 ```
 src/
-├── main.rs              # Application entry, event loop, state management
+├── main.rs              # Application entry, FractalApp with RenderState + InteractionState
 ├── ui/mod.rs            # Control panel UI components
-├── fractal/mod.rs       # Fractal trait & 12 implementations
+├── fractal/mod.rs       # Fractal trait, compute_full(), & 12 implementations
+├── fractal/registry.rs  # Fractal factory and registry
 ├── palette/mod.rs       # Color palette system (5 palettes)
-├── color_pipeline.rs    # Color processor system (5 processors)
-├── command.rs           # Command pattern for undo/redo
-├── renderer/mod.rs      # Screen-to-fractal coordinate mapping
+├── color_pipeline.rs    # Color processor system (5 processors, FractalResult, OrbitData)
+├── command.rs           # Command pattern for undo/redo (uses FractalViewState)
+├── renderer/mod.rs      # Rendering engine with pan optimization
 └── viewport.rs          # Viewport and coordinate transforms
 ```
 
 ### Key Components
 
-**FractalApp**: Main application state managing:
-- View state per fractal type
-- Undo/redo history
-- Incremental rendering with timing
-- Supersampling buffers
-- Bookmarks
-- Pan optimization with pixel reuse
+**FractalApp**: Main application state composed of:
+- `RenderState` - Rendering engine, config, progress, caches, texture handles
+- `InteractionState` - Drag state, zoom preview, mouse position, status messages
+- Per-fractal views, command histories, bookmarks, viewport
 
-**ViewHistory**: Manages undo/redo stack (50 entries max)
+**Fractal trait**: Provides `compute()` for iteration count and `compute_full()` for rich `FractalResult` with orbit data and final_z, used by all color processors.
 
-**Incremental Rendering**: Renders fractal in chunks for UI responsiveness with progress updates
+**Multibrot**: Delegates to Mandelbrot's compute methods (same formula, different default power/range).
 
-**Pan Optimization**: When panning with arrow keys, shifts existing pixels and only renders new edge strips
+**Named constants**: All magic numbers extracted to `const` declarations at module level (`BAILOUT_R2`, `POWER2_EPSILON`, `UNDO_HISTORY_CAPACITY`, `MINIMAP_SIZE`, etc.).
 
 ## Dependencies
 
 - `eframe` / `egui` - GUI framework
 - `rayon` - Data-parallel processing for rendering
 - `image` - PNG export functionality
+- `num-complex` - Complex number type for orbit data
 - `serde` / `serde_json` - Configuration serialization
 - `dirs` - Cross-platform config directory detection
 
@@ -249,16 +253,20 @@ src/
 - **Use 1x export** for quick saves, 2x/4x for high quality
 - **Enable adaptive iterations** for automatic quality adjustment at different zoom levels
 - **Use arrow keys** for panning - reuses ~87.5% of pixels via optimization
+- **Power=2 fractals** use a fast algebraic path (3-5x faster than De Moivre)
 - Rendering is CPU-parallel using all available cores
 
-## Recent Fixes
+## Test Coverage (78 tests)
 
-### Critical Bug Fixes (2026-02-13)
-- **Fractal Computation** - Fixed hardcoded `2.0` multiplier to use actual `power` parameter in all power-based fractals
-- **Burning Ship** - Moved `abs()` operations before power transformation for correct rendering
-- **Smooth Coloring** - Fixed formula and optimized with `norm_sqr()` to avoid sqrt operations
-- **Division by Zero Protection** - Added guards throughout viewport calculations
-- **Phoenix Defaults** - Changed to c_real=0.0, c_imag=0.4, memory=0.55 with 100 iterations
+| Module | Tests | Coverage |
+|---|---|---|
+| `fractal/mod.rs` | 29 | All 12 fractal types, compute_full, edge cases, parameter clamping |
+| `palette/mod.rs` | 16 | All 5 palettes, HSV conversion, interpolation, offsets |
+| `command.rs` | 6 | View/parameter commands, history, undo/redo, limits |
+| `color_pipeline.rs` | 6 | All processors, orbit data, smooth coloring |
+| `renderer/mod.rs` | 5 | Screen-to-fractal mapping, pan regions, downsampling |
+| `viewport.rs` | 7 | Screen-to-world, pan, zoom, roundtrip |
+| `fractal/registry.rs` | 4 | Registry, factory, metadata |
 
 ## License
 
