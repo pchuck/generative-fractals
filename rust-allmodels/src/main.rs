@@ -73,7 +73,7 @@ impl Default for AppConfig {
 
 impl AppConfig {
     fn config_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|dir| dir.join("fractal-explorer").join("config.json"))
+        dirs::config_dir().map(|dir| dir.join("fractal-oxide").join("config.json"))
     }
 
     fn load() -> Self {
@@ -1119,7 +1119,7 @@ impl eframe::App for FractalApp {
                     }
 
                     ui.separator();
-                    ui.label("Fractal Explorer\n(c)2026 ultrametrics.net");
+                    ui.label("Fractal Oxide\nCopyright © 2026 ultrametrics");
 
                     if ui.button("Close").clicked() {
                         self.show_about_dialog = false;
@@ -1537,19 +1537,19 @@ impl eframe::App for FractalApp {
 }
 
 fn main() -> eframe::Result {
-    eprintln!("STARTING Fractal Explorer...");
+    eprintln!("STARTING Fractal Oxide...");
 
     let config = AppConfig::load();
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([config.window_width, config.window_height])
-            .with_title("Fractal Explorer"),
+            .with_title("Fractal Oxide"),
         ..Default::default()
     };
 
     eframe::run_native(
-        "Fractal Explorer",
+        "Fractal Oxide",
         options,
         Box::new(|_cc| Ok(Box::new(FractalApp::new(&config)))),
     )

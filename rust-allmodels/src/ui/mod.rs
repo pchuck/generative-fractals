@@ -63,7 +63,7 @@ impl FractalControls {
         changed: &mut bool,
         render_status: &RenderStatus,
     ) {
-        ui.heading("Fractal Explorer");
+        ui.heading("Fractal Oxide");
         ui.separator();
 
         // Fractal Type and Render Status side by side

@@ -1,8 +1,8 @@
-# Fractal Explorer
+# Fractal Forge
 
 Interactive fractal explorer built with Rust, eframe/egui, and Rayon for parallel CPU rendering.
 
-![Fractal Explorer Screenshot](screenshot.png)
+![Fractal Forge Screenshot](screenshot.png)
 
 ## Features
 

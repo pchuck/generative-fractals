@@ -1,4 +1,4 @@
-# Agent Guidelines - Rust Fractal Explorer
+# Agent Guidelines - Rust Fractal Forge
 
 ## Project Overview
 
