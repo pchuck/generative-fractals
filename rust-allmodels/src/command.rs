@@ -413,8 +413,10 @@ mod tests {
         let new_viewport = Viewport::new(1.0, 1.0, 2.0);
         let cmd = ViewCommand::new(old_viewport, new_viewport);
 
-        let mut state = AppState::default();
-        state.viewport = old_viewport;
+        let mut state = AppState {
+            viewport: old_viewport,
+            ..Default::default()
+        };
 
         cmd.execute(&mut state);
         assert_eq!(state.viewport.center(), (1.0, 1.0));

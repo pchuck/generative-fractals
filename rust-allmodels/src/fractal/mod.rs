@@ -696,9 +696,9 @@ pub struct Phoenix {
 impl Default for Phoenix {
     fn default() -> Self {
         Phoenix {
-            c_real: 0.5667,
-            c_imag: -0.5,
-            memory: 0.5,
+            c_real: 0.0,
+            c_imag: 0.4,
+            memory: 0.55,
         }
     }
 }

@@ -50,7 +50,7 @@ Color processors transform fractal iteration data into colors using different al
 - **Mouse Coordinates** - Shows fractal coordinates (real, imaginary) under cursor
 - **Zoom Preview** - Blocky preview when zooming for instant feedback
 - **Progress Bar** - Shows rendering progress for large images
-- **Render Time** - Displays last render duration (e.g., "Last render: 450ms")
+- **Render Time** - Displays thread count and last render duration (e.g., "Parallel: 16 threads / Last render: 450ms")
 - **Supersampling** - 2x supersampling for smoother edges (toggle in UI)
 - **Mini-map** - Small overview (150×150) showing full fractal with current view rectangle
 - **Pan Optimization** - When panning with arrow keys, existing pixels are shifted and only new edge strips are recalculated (~87.5% performance improvement)

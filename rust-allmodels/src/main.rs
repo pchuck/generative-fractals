@@ -1,6 +1,5 @@
 use eframe::egui;
 use image::{ImageBuffer, Rgb};
-use rayon;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -155,13 +154,19 @@ impl FractalApp {
         // Initialize views from registry metadata
         for ft in registry.all_types() {
             if let Some(metadata) = registry.metadata(ft) {
+                // Phoenix has different default iterations
+                let max_iter = if ft == FractalType::Phoenix {
+                    100
+                } else {
+                    config.default_iterations
+                };
                 views.insert(
                     ft,
                     FractalViewState {
                         center_x: metadata.default_center.0,
                         center_y: metadata.default_center.1,
                         zoom: metadata.default_zoom,
-                        max_iterations: config.default_iterations,
+                        max_iterations: max_iter,
                         fractal_params: HashMap::new(),
                         palette_type: config.default_palette,
                         color_processor_type: color_pipeline::ColorProcessorType::default(),
@@ -170,10 +175,17 @@ impl FractalApp {
             }
         }
 
+        // Phoenix has different default iterations
+        let initial_iterations = if config.default_fractal == FractalType::Phoenix {
+            100
+        } else {
+            config.default_iterations
+        };
+
         let controls = FractalControls {
             fractal_type: config.default_fractal,
-            max_iterations: config.default_iterations,
-            pending_max_iterations: config.default_iterations,
+            max_iterations: initial_iterations,
+            pending_max_iterations: initial_iterations,
             palette_type: config.default_palette,
             ..Default::default()
         };
@@ -182,7 +194,7 @@ impl FractalApp {
             .create(config.default_fractal)
             .expect("Default fractal should be registered");
 
-        let app = FractalApp {
+        FractalApp {
             fractal,
             controls,
             views,
@@ -224,9 +236,7 @@ impl FractalApp {
                 config.default_fractal.default_center().1,
                 1.0,
             ),
-        };
-
-        app
+        }
     }
 
     /// Helper method to create a fractal using the registry
@@ -295,7 +305,7 @@ impl FractalApp {
         let command = Box::new(ViewCommand::new(old_viewport, new_viewport));
         let mut state = self.to_app_state();
         self.get_command_history().execute(command, &mut state);
-        self.from_app_state(&state);
+        self.apply_app_state(&state);
     }
 
     #[allow(dead_code)]
@@ -307,7 +317,7 @@ impl FractalApp {
         let command = Box::new(IterationCommand::new(old_iter, new_iter));
         let mut state = self.to_app_state();
         self.get_command_history().execute(command, &mut state);
-        self.from_app_state(&state);
+        self.apply_app_state(&state);
     }
 
     #[allow(dead_code)]
@@ -330,7 +340,7 @@ impl FractalApp {
         ));
         let mut state = self.to_app_state();
         self.get_command_history().execute(command, &mut state);
-        self.from_app_state(&state);
+        self.apply_app_state(&state);
     }
 
     #[allow(dead_code)]
@@ -342,7 +352,7 @@ impl FractalApp {
         let command = Box::new(ParameterCommand::new(param_name, old_value, new_value));
         let mut state = self.to_app_state();
         self.get_command_history().execute(command, &mut state);
-        self.from_app_state(&state);
+        self.apply_app_state(&state);
     }
 
     fn to_app_state(&self) -> AppState {
@@ -357,7 +367,7 @@ impl FractalApp {
         }
     }
 
-    fn from_app_state(&mut self, state: &AppState) {
+    fn apply_app_state(&mut self, state: &AppState) {
         self.controls.fractal_type = state.fractal_type;
         self.viewport = state.viewport;
         self.controls.max_iterations = state.max_iterations;
@@ -585,7 +595,7 @@ impl FractalApp {
     fn undo(&mut self) {
         let mut state = self.to_app_state();
         if let Some(description) = self.get_command_history().undo(&mut state) {
-            self.from_app_state(&state);
+            self.apply_app_state(&state);
             self.fractal = self.create_fractal(state.fractal_type);
             self.invalidate_cache();
             self.set_status(format!("Undo: {}", description));
@@ -595,7 +605,7 @@ impl FractalApp {
     fn redo(&mut self) {
         let mut state = self.to_app_state();
         if let Some(description) = self.get_command_history().redo(&mut state) {
-            self.from_app_state(&state);
+            self.apply_app_state(&state);
             self.fractal = self.create_fractal(state.fractal_type);
             self.invalidate_cache();
             self.set_status(format!("Redo: {}", description));
@@ -626,7 +636,6 @@ impl FractalApp {
 
     fn load_bookmark(&mut self, index: usize) {
         if let Some(bookmark) = self.bookmarks.get(index).cloned() {
-            // TODO: Integrate with CommandHistory
             let _old_viewport = self.viewport;
             self.controls.fractal_type = bookmark.fractal_type;
             self.fractal = self.create_fractal(bookmark.fractal_type);
@@ -788,7 +797,6 @@ impl eframe::App for FractalApp {
 
                 // Reset view: R key
                 if i.key_pressed(egui::Key::R) && !i.modifiers.shift {
-                    // TODO: Integrate with CommandHistory
                     let _old_viewport = self.viewport;
                     self.reset_view();
                     self.invalidate_cache();
@@ -863,7 +871,6 @@ impl eframe::App for FractalApp {
                 // View controls
                 ui.horizontal(|ui| {
                     if ui.button("Reset View (R)").clicked() {
-                        // TODO: Integrate with CommandHistory
                         let _old_viewport = self.viewport;
                         self.reset_view();
                         self.invalidate_cache();
@@ -873,7 +880,6 @@ impl eframe::App for FractalApp {
                         .on_hover_text("Reset view, palette, and parameters")
                         .clicked()
                     {
-                        // TODO: Integrate with CommandHistory
                         let _old_viewport = self.viewport;
                         self.reset_settings();
                     }

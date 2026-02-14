@@ -60,20 +60,12 @@ pub struct ChunkResult {
 }
 
 /// The rendering engine - handles all fractal rendering operations
+#[derive(Default)]
 pub struct RenderEngine {
     // Buffer for supersampled rendering (2x resolution)
     supersample_buffer: Option<Vec<Color32>>,
     // Buffer for normal rendering
     render_buffer: Option<Vec<Color32>>,
-}
-
-impl Default for RenderEngine {
-    fn default() -> Self {
-        Self {
-            supersample_buffer: None,
-            render_buffer: None,
-        }
-    }
 }
 
 impl RenderEngine {
